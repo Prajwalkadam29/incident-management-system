@@ -24,14 +24,20 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
 
+    # Auth — default users (override via env vars in production)
+    ADMIN_USERNAME: str = "admin"
+    ADMIN_PASSWORD: str = "admin123"
+    VIEWER_USERNAME: str = "viewer"
+    VIEWER_PASSWORD: str = "viewer123"
+
     # Rate Limiting
-    RATE_LIMIT_REQUESTS: int = 1000   # max requests
-    RATE_LIMIT_WINDOW: int = 60       # per 60 seconds per IP
+    RATE_LIMIT_REQUESTS: int = 1000
+    RATE_LIMIT_WINDOW: int = 60
 
     # Redis Streams
     STREAM_NAME: str = "ims:signals"
     STREAM_CONSUMER_GROUP: str = "ims_workers"
-    STREAM_MAX_LEN: int = 100_000     # cap stream length in memory
+    STREAM_MAX_LEN: int = 100_000
 
     # Debounce
     DEBOUNCE_WINDOW_SECONDS: int = 10
@@ -50,5 +56,4 @@ def get_settings() -> Settings:
     return Settings()
 
 
-# Convenience singleton — import this everywhere
 settings = get_settings()
