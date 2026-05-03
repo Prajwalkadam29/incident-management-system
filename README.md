@@ -6,7 +6,7 @@ caches, async queues, RDBMS, and NoSQL stores.
 
 Built as part of the Zeotap Infrastructure / SRE Intern assignment.
 
-**GitHub:** https://github.com/YOUR_USERNAME/incident-management-system
+**GitHub:** https://github.com/Prajwalkadam29/incident-management-system
 
 ---
 
@@ -30,55 +30,57 @@ Built as part of the Zeotap Infrastructure / SRE Intern assignment.
 
 ## Architecture
 
-┌─────────────────────────────────┐
-                │         Signal Producers          │
-                │  (APIs, Caches, DBs, MCP Hosts)  │
-                └──────────────┬───────────────────┘
+```architecture
+                ┌─────────────────────────────────┐
+                │         Signal Producers        │
+                │  (APIs, Caches, DBs, MCP Hosts) │
+                └──────────────┬──────────────────┘
                                │ HTTP POST /api/v1/signals/ingest
                                │ (Rate Limited — 1000 req/min per IP)
                                ▼
                 ┌─────────────────────────────────┐
-                │     FastAPI Ingestion Layer       │
-                │  • Pydantic validation            │
-                │  • Token bucket rate limiter      │
-                │  • Returns 202 immediately        │
-                └──────────────┬───────────────────┘
+                │     FastAPI Ingestion Layer     │
+                │  • Pydantic validation          │
+                │  • Token bucket rate limiter    │
+                │  • Returns 202 immediately      │
+                └──────────────┬──────────────────┘
                                │ Non-blocking XADD
                                ▼
                 ┌─────────────────────────────────┐
-                │        Redis Streams              │  ← BACKPRESSURE BUFFER
-                │   MAXLEN ~100,000 entries         │
-                │   Consumer Group: ims_workers     │
-                └──────────────┬───────────────────┘
+                │        Redis Streams            │  ← BACKPRESSURE BUFFER
+                │   MAXLEN ~100,000 entries       │
+                │   Consumer Group: ims_workers   │
+                └──────────────┬──────────────────┘
                                │ XREADGROUP (batch 50)
                                ▼
                 ┌─────────────────────────────────┐
-                │      Async Worker Pool            │
-                │  • Debounce (Redis SETNX + TTL)  │
-                │  • Alerting Strategy Pattern      │
-                │  • Work Item State Machine        │
-                │  • Retry logic (tenacity)         │
-                └──────┬───────────────┬───────────┘
+                │      Async Worker Pool          │
+                │  • Debounce (Redis SETNX + TTL) │
+                │  • Alerting Strategy Pattern    │
+                │  • Work Item State Machine      │
+                │  • Retry logic (tenacity)       │
+                └──────┬───────────────┬──────────┘
                        │               │
           ┌────────────▼───┐    ┌──────▼──────────┐
-          │   MongoDB       │    │   PostgreSQL     │
-          │  Raw Signals    │    │   Work Items     │
-          │  (Audit Log)    │    │   RCA Records    │
-          └─────────────────┘    └──────┬───────────┘
+          │   MongoDB      │    │   PostgreSQL    │
+          │  Raw Signals   │    │   Work Items    │
+          │  (Audit Log)   │    │   RCA Records   │
+          └────────────────┘    └──────┬──────────┘
                                         │
                           ┌─────────────▼──────────┐
-                          │      Redis Cache         │
-                          │  • Dashboard hot-path   │
-                          │  • Debounce locks        │
-                          │  • TimeSeries metrics    │
-                          └─────────────┬────────────┘
+                          │      Redis Cache       │
+                          │  • Dashboard hot-path  │
+                          │  • Debounce locks      │
+                          │  • TimeSeries metrics  │
+                          └─────────────┬──────────┘
                                         │
                           ┌─────────────▼──────────┐
-                          │     React Frontend       │
-                          │  • Live incident feed    │
-                          │  • Incident detail view  │
-                          │  • RCA submission form   │
-                          └────────────────────────-┘
+                          │     React Frontend     │
+                          │ • Live incident feed   │
+                          │ • Incident detail view │
+                          │ • RCA submission form  │
+                          └────────────────────────┘
+```
 
 ---
 
@@ -186,7 +188,7 @@ ims/
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/incident-management-system.git
+git clone https://github.com/Prajwalkadam29/incident-management-system.git
 cd incident-management-system
 ```
 
