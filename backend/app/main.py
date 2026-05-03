@@ -13,7 +13,6 @@ from app.db.redis_client import init_redis, close_redis, get_redis
 from app.models.schemas import HealthResponse, ServiceHealth
 from app.services.worker import start_worker, stop_worker
 
-# Configure structured logging
 structlog.configure(
     processors=[
         structlog.stdlib.add_log_level,
@@ -29,24 +28,21 @@ _start_time = time.time()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("🚀 Starting Incident Management System",
+    logger.info("Starting Incident Management System",
                 version=settings.APP_VERSION,
                 environment=settings.ENVIRONMENT)
-
     await init_redis()
     await init_mongo()
     await init_db()
-    await start_worker()   # ← NEW: start background worker
-
-    logger.info("✅ All services started")
+    await start_worker()
+    logger.info("All services started")
     yield
-
-    logger.info("🛑 Shutting down IMS...")
-    await stop_worker()    # ← NEW: graceful worker shutdown
+    logger.info("Shutting down IMS...")
+    await stop_worker()
     await close_db()
     await close_mongo()
     await close_redis()
-    logger.info("✅ Shutdown complete")
+    logger.info("Shutdown complete")
 
 
 app = FastAPI(
@@ -66,12 +62,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Register Routers ──
+# ── Register all routers ──
 from app.api.signals import router as signals_router
 from app.api.workitems import router as workitems_router
+from app.api.auth import router as auth_router
+from app.api.metrics import router as metrics_router
 
+app.include_router(auth_router)
 app.include_router(signals_router)
 app.include_router(workitems_router)
+app.include_router(metrics_router)
 
 
 @app.get("/health", response_model=HealthResponse, tags=["Observability"])
@@ -128,5 +128,6 @@ async def root():
         "app": settings.APP_NAME,
         "version": settings.APP_VERSION,
         "docs": "/docs",
-        "health": "/health"
+        "health": "/health",
+        "metrics": "/metrics",
     }
