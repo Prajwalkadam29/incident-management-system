@@ -1,3 +1,4 @@
+import asyncio
 import structlog
 from fastapi import APIRouter, Depends, Query
 from typing import Optional
@@ -16,21 +17,18 @@ router = APIRouter(prefix="/api/v1/signals", tags=["Signals"])
 @router.post(
     "/ingest",
     response_model=SignalResponse,
-    status_code=202,  # 202 Accepted — async processing
+    status_code=202,
     summary="Ingest a signal from a monitored component",
     dependencies=[Depends(rate_limit_dependency)],
 )
 async def ingest(signal: SignalIngestionRequest):
-    """
-    High-throughput signal ingestion endpoint.
-
-    - Validates the payload
-    - Pushes to Redis Stream (non-blocking, <1ms)
-    - Returns 202 Accepted immediately
-
-    All processing (debounce, DB writes, alerting) happens asynchronously.
-    """
     signal_id = await ingest_signal(signal)
+
+    # Storm detection — fire and forget, never blocks the response
+    asyncio.create_task(
+        __import__('app.api.sse', fromlist=['record_signal_for_storm_detection'])
+        .record_signal_for_storm_detection()
+    )
 
     return SignalResponse(
         signal_id=signal_id,
