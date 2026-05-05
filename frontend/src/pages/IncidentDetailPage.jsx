@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import api from '@/api/client'
 import { SeverityBadge } from '@/components/SeverityBadge'
 import { StatusBadge } from '@/components/StatusBadge'
+import { RunbookSuggester } from '@/components/RunbookSuggester'
 
 const STATUS_FLOW = ['OPEN', 'INVESTIGATING', 'RESOLVED', 'CLOSED']
 
@@ -126,6 +127,9 @@ export default function IncidentDetailPage() {
             </div>
           </div>
         )}
+
+          {/* AI Runbook */}
+        <RunbookSuggester incident={incident} />
 
         {/* Raw Signals */}
         <div className="bg-gray-900 border border-gray-800 rounded-xl">

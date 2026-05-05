@@ -22,9 +22,9 @@ class Settings(BaseSettings):
     # JWT
     JWT_SECRET: str = "super_secret_jwt_key_change_in_production"
     JWT_ALGORITHM: str = "HS256"
-    JWT_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
+    JWT_EXPIRE_MINUTES: int = 60 * 24
 
-    # Auth — default users (override via env vars in production)
+    # Auth
     ADMIN_USERNAME: str = "admin"
     ADMIN_PASSWORD: str = "admin123"
     VIEWER_USERNAME: str = "viewer"
@@ -45,6 +45,27 @@ class Settings(BaseSettings):
 
     # Observability
     METRICS_INTERVAL_SECONDS: int = 5
+
+    # ── AI Runbook Suggester ──────────────────────────────
+    # Which provider to use: gemini | claude | openai | ollama
+    AI_PROVIDER: str = "gemini"
+
+    # Gemini
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-2.0-flash"
+
+    # Claude (future)
+    CLAUDE_API_KEY: str = ""
+    CLAUDE_MODEL: str = "claude-sonnet-4-20250514"
+
+    # OpenAI (future)
+    OPENAI_API_KEY: str = ""
+    OPENAI_MODEL: str = "gpt-4o-mini"
+
+    # Ollama (future — local model, no API key needed)
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    OLLAMA_MODEL: str = "llama3"
+    # ─────────────────────────────────────────────────────
 
     class Config:
         env_file = ".env"

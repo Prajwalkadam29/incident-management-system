@@ -68,12 +68,14 @@ from app.api.workitems import router as workitems_router
 from app.api.auth import router as auth_router
 from app.api.metrics import router as metrics_router
 from app.api.sse import router as sse_router
+from app.api.ai import router as ai_router
 
 app.include_router(auth_router)
 app.include_router(signals_router)
 app.include_router(workitems_router)
 app.include_router(metrics_router)
 app.include_router(sse_router)
+app.include_router(ai_router)
 
 
 @app.get("/health", response_model=HealthResponse, tags=["Observability"])
