@@ -6,6 +6,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+# OpenTelemetry imports
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
 from app.core.config import settings
 from app.db.postgres import init_db, close_db
 from app.db.mongo import init_mongo, close_mongo
@@ -53,6 +61,22 @@ app = FastAPI(
     redoc_url="/redoc",
     lifespan=lifespan,
 )
+
+# ── OpenTelemetry Tracing Setup ──
+resource = Resource.create({
+    "service.name": settings.APP_NAME,
+    "service.version": settings.APP_VERSION,
+    "deployment.environment": settings.ENVIRONMENT
+})
+tracer_provider = TracerProvider(resource=resource)
+# Send traces to Jaeger (OTLP gRPC)
+# Jaeger's OTLP gRPC port is typically 4317
+otlp_exporter = OTLPSpanExporter(endpoint="http://jaeger:4317", insecure=True)
+tracer_provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
+trace.set_tracer_provider(tracer_provider)
+
+# Instrument FastAPI
+FastAPIInstrumentor.instrument_app(app)
 
 app.add_middleware(
     CORSMiddleware,

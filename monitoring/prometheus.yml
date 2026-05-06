@@ -1,0 +1,66 @@
+# ============================================================
+# Prometheus Configuration — IMS
+# Production-grade scrape config for the Incident Management System.
+#
+# How companies like Datadog/Stripe do it:
+#   - Separate scrape intervals per target based on volatility
+#   - Short interval (5s) for critical metrics, longer (30s) for infra
+#   - Retention driven by business need (MTTR trend needs 90d)
+# ============================================================
+
+global:
+  scrape_interval:     15s   # Default: scrape every 15 seconds
+  evaluation_interval: 15s   # Evaluate alert rules every 15 seconds
+  scrape_timeout:      10s
+
+  # Attach these labels to all time series produced by this Prometheus
+  external_labels:
+    environment: 'development'
+    project:     'ims'
+
+# ── Alert Rules ────────────────────────────────────────────
+rule_files:
+  - /etc/prometheus/alert_rules.yml
+
+# ── Alertmanager (uncomment when you add Alertmanager) ────
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: ['alertmanager:9093']
+
+# ── Scrape Targets ─────────────────────────────────────────
+scrape_configs:
+
+  # Prometheus itself — monitors its own health
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    relabel_configs:
+      - target_label: instance
+        replacement:  'prometheus'
+
+  # ── IMS FastAPI Backend ───────────────────────────────────
+  # Scrapes the custom /metrics endpoint every 5s for high-fidelity
+  # signal tracking — important because signals fire in bursts.
+  - job_name: 'ims_backend'
+    scrape_interval: 5s     # Higher frequency for ops metrics
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['backend:8000']
+        labels:
+          service:     'ims-backend'
+          component:   'api'
+
+  # ── PostgreSQL Exporter (optional — add when you add the exporter) ─
+  # - job_name: 'postgres'
+  #   static_configs:
+  #     - targets: ['postgres-exporter:9187']
+  #       labels:
+  #         service: 'postgres'
+
+  # ── Redis Exporter (optional — add when you add the exporter) ──────
+  # - job_name: 'redis'
+  #   static_configs:
+  #     - targets: ['redis-exporter:9121']
+  #       labels:
+  #         service: 'redis'

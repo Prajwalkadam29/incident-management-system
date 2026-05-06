@@ -2,7 +2,7 @@ import structlog
 import google.generativeai as genai
 
 from app.core.config import settings
-from app.services.ai_providers.base import BaseAIProvider, RunbookRequest, RunbookResponse
+from app.services.ai_providers.base import BaseAIProvider, RunbookRequest, RunbookResponse, RCARequest, RCAResponse
 
 logger = structlog.get_logger(__name__)
 
@@ -49,3 +49,25 @@ class GeminiProvider(BaseAIProvider):
         logger.debug("Gemini raw response", text=raw_text[:200])
 
         return self.parse_response(raw_text, self.provider_name(), settings.GEMINI_MODEL)
+
+    async def generate_rca(self, request: RCARequest) -> RCAResponse:
+        prompt = self.build_rca_prompt(request)
+
+        logger.info(
+            "Generating RCA draft with Gemini",
+            model=settings.GEMINI_MODEL,
+            work_item=request.work_item_id,
+            severity=request.severity,
+        )
+
+        import asyncio
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: self._model.generate_content(prompt)
+        )
+
+        raw_text = response.text
+        logger.debug("Gemini raw RCA response", text=raw_text[:200])
+
+        return self.parse_rca_response(raw_text, self.provider_name(), settings.GEMINI_MODEL)

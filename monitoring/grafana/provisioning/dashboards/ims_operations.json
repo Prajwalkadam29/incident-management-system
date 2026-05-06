@@ -1,0 +1,92 @@
+{
+  "title": "IMS Operations & API Performance",
+  "uid": "ims-ops-01",
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "timezone": "browser",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Total Signals Ingested",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+      "targets": [{"expr": "sum(ims_signals_ingested_total)", "legendFormat": "Signals"}],
+      "options": {"colorMode": "value", "graphMode": "area"}
+    },
+    {
+      "type": "stat",
+      "title": "Active P0/P1 Incidents",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+      "targets": [{"expr": "sum(ims_active_incidents{severity=~\"P0|P1\"})", "legendFormat": "Critical Incidents"}],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "red", "value": 1}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Worker Processed Total",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+      "targets": [{"expr": "sum(ims_worker_signals_processed_total)", "legendFormat": "Processed"}],
+      "options": {"colorMode": "value", "graphMode": "area"}
+    },
+    {
+      "type": "stat",
+      "title": "Backend API Uptime",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+      "targets": [{"expr": "up{job=\"ims_backend\"}", "legendFormat": "Backend"}],
+      "options": {"colorMode": "background", "graphMode": "none"},
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [{"options": {"0": {"text": "DOWN"}, "1": {"text": "UP"}}, "type": "value"}],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Signal Ingestion Rate (/sec)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "targets": [{"expr": "sum(rate(ims_signals_ingested_total[1m])) by (severity)", "legendFormat": "{{severity}}"}],
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "API p95 Latency",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "targets": [
+        {"expr": "histogram_quantile(0.95, sum(rate(ims_http_request_duration_seconds_bucket[5m])) by (le, endpoint))", "legendFormat": "{{endpoint}}"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "s", "custom": {"axisPlacement": "left"}}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Active Incidents by Severity",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+      "targets": [{"expr": "ims_active_incidents", "legendFormat": "{{severity}}"}],
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"fillOpacity": 20, "lineWidth": 2, "insertNulls": false}
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "MTTR Trend (Median Minutes)",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+      "targets": [{"expr": "histogram_quantile(0.5, sum(rate(ims_mttr_minutes_bucket[1h])) by (le))", "legendFormat": "Median MTTR (minutes)"}],
+      "fieldConfig": {"defaults": {"unit": "m"}}
+    }
+  ]
+}

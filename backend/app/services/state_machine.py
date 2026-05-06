@@ -113,9 +113,12 @@ class ResolvedState(WorkItemState):
                 "A complete Root Cause Analysis (RCA) must be submitted first."
             )
 
-        # Calculate MTTR — from first signal to RCA submission
+        # MTTR = time from first signal (work_item.created_at, set by the DB on INSERT)
+        #         to the moment the RCA was submitted (rca.created_at, also set by the DB).
+        # Both timestamps are server-generated — not user-editable — making this tamper-proof.
+        # The spec defines MTTR as: "start_time (first signal) → RCA submission".
         start = work_item.created_at
-        end = work_item.rca.incident_end
+        end = work_item.rca.created_at  # system timestamp of RCA submission
 
         # Ensure both are timezone-aware for subtraction
         if start.tzinfo is None:
@@ -124,7 +127,8 @@ class ResolvedState(WorkItemState):
             end = end.replace(tzinfo=timezone.utc)
 
         mttr_minutes = (end - start).total_seconds() / 60
-        work_item.mttr_minutes = round(mttr_minutes, 2)
+        # Guard against negative MTTR (should never happen, but be defensive)
+        work_item.mttr_minutes = round(max(mttr_minutes, 0.0), 2)
         work_item.status = WorkItemStatus.CLOSED
         work_item.closed_at = datetime.now(timezone.utc)
         work_item.updated_at = datetime.now(timezone.utc)

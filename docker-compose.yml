@@ -1,30 +1,41 @@
+# ============================================================
+# IMS — Docker Compose (Development)
+# Secrets are injected from .env — never hardcoded here.
+# Run: cp .env.example .env && fill in values, then:
+#      docker compose up --build
+# ============================================================
+
 services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────
   postgres:
     image: postgres:15-alpine
     container_name: ims_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ims_user
-      POSTGRES_PASSWORD: ims_password
-      POSTGRES_DB: ims_db
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB:       ${POSTGRES_DB}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ims_user -d ims_db"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
 
+  # ── MongoDB ─────────────────────────────────────────────────
   mongodb:
     image: mongo:6.0
     container_name: ims_mongodb
     restart: unless-stopped
     environment:
-      MONGO_INITDB_ROOT_USERNAME: ims_user
-      MONGO_INITDB_ROOT_PASSWORD: ims_password
-      MONGO_INITDB_DATABASE: ims_db
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE:      ${MONGO_INITDB_DATABASE}
     ports:
       - "27017:27017"
     volumes:
@@ -34,14 +45,16 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 15s
 
+  # ── Redis Stack (Redis + RedisInsight UI) ───────────────────
   redis:
     image: redis/redis-stack:latest
     container_name: ims_redis
     restart: unless-stopped
     ports:
       - "6379:6379"
-      - "8001:8001"   # RedisInsight UI — very handy for debugging
+      - "8001:8001"   # RedisInsight UI
     volumes:
       - redis_data:/data
     healthcheck:
@@ -49,24 +62,24 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 5s
 
+  # ── FastAPI Backend ─────────────────────────────────────────
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     container_name: ims_backend
     restart: unless-stopped
+    env_file:
+      - .env              # all secrets injected from .env file
+    environment:
+      # These override the .env values — use Docker service names, not localhost
+      POSTGRES_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      MONGO_URL:    mongodb://${MONGO_INITDB_ROOT_USERNAME}:${MONGO_INITDB_ROOT_PASSWORD}@mongodb:27017/${MONGO_INITDB_DATABASE}?authSource=admin
+      REDIS_URL:    redis://redis:6379
     ports:
       - "8000:8000"
-    environment:
-      - POSTGRES_URL=postgresql+asyncpg://ims_user:ims_password@postgres:5432/ims_db
-      - MONGO_URL=mongodb://ims_user:ims_password@mongodb:27017/ims_db?authSource=admin
-      - REDIS_URL=redis://redis:6379
-      - JWT_SECRET=super_secret_jwt_key_change_in_production
-      - ENVIRONMENT=development
-      - AI_PROVIDER=gemini
-      - GEMINI_API_KEY=your_gemini_api_key
-      - GEMINI_MODEL=gemini-2.5-flash
     depends_on:
       postgres:
         condition: service_healthy
@@ -75,9 +88,63 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ./backend:/app   # hot reload during dev
+      - ./backend:/app   # hot reload in development
 
+  # NOTE: Frontend is a Vite dev server — run locally with:
+  #   cd frontend && npm install && npm run dev
+  # It proxies /api/* to http://localhost:8000 via vite.config.js
+  # A production frontend Dockerfile will be added in a future step.
+
+  # ── Prometheus ──────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    container_name: ims_prometheus
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--storage.tsdb.retention.time=15d'
+    ports:
+      - "9090:9090"
+
+  # ── Grafana ─────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.0.3
+    container_name: ims_grafana
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+  # ── Jaeger (Distributed Tracing) ────────────────────────────
+  jaeger:
+    image: jaegertracing/all-in-one:1.55
+    container_name: ims_jaeger
+    restart: unless-stopped
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "4317:4317"    # OTLP gRPC receiver (used by backend)
+      - "4318:4318"    # OTLP HTTP receiver
+
+# ── Named Volumes ────────────────────────────────────────────
 volumes:
   postgres_data:
   mongo_data:
   redis_data:
+  prometheus_data:
+  grafana_data:

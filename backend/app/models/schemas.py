@@ -97,7 +97,7 @@ class WorkItemResponse(BaseModel):
     resolved_at: Optional[datetime] = None
     closed_at: Optional[datetime] = None
     mttr_minutes: Optional[float] = None
-    signal_count: str = "0"
+    signal_count: int = 0
     rca: Optional[RCARecordSchema] = None
 
     class Config:

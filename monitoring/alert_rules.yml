@@ -1,0 +1,117 @@
+groups:
+
+  # ── Backend Availability ──────────────────────────────────
+  - name: ims_backend_availability
+    rules:
+
+      - alert: IMSBackendDown
+        expr: up{job="ims_backend"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          team:     sre
+        annotations:
+          summary:     "IMS Backend is DOWN"
+          description: "The IMS backend at {{ $labels.instance }} has been unreachable for > 30s. Alembic migrations may have failed or the process crashed."
+          runbook:     "docker compose logs backend"
+
+      - alert: IMSBackendHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            rate(ims_http_request_duration_seconds_bucket[5m])
+          ) > 0.5
+        for: 2m
+        labels:
+          severity: warning
+          team:     sre
+        annotations:
+          summary:     "IMS API p95 latency > 500ms"
+          description: "p95 latency is {{ $value | humanizeDuration }} on {{ $labels.endpoint }}. SLO breach in progress."
+
+      - alert: IMSBackendCriticalLatency
+        expr: |
+          histogram_quantile(0.99,
+            rate(ims_http_request_duration_seconds_bucket[5m])
+          ) > 2.0
+        for: 1m
+        labels:
+          severity: critical
+          team:     sre
+        annotations:
+          summary:     "IMS API p99 latency > 2s — SLO BREACH"
+          description: "p99 latency is {{ $value | humanizeDuration }}. Users are experiencing severe degradation."
+
+  # ── Incident Operations ───────────────────────────────────
+  - name: ims_incident_operations
+    rules:
+
+      - alert: P0IncidentActive
+        expr: ims_active_incidents{severity="P0"} > 0
+        for: 0s   # Fire immediately on first scrape
+        labels:
+          severity: critical
+          team:     oncall
+        annotations:
+          summary:     "{{ $value }} P0 incident(s) ACTIVE"
+          description: "There are {{ $value }} P0 (critical) incidents currently open. Immediate response required."
+
+      - alert: P0IncidentUnacknowledged
+        expr: ims_active_incidents{severity="P0"} > 0
+        for: 5m
+        labels:
+          severity: critical
+          team:     oncall
+        annotations:
+          summary:     "P0 incident unacknowledged for 5+ minutes"
+          description: "{{ $value }} P0 incident(s) have been open for > 5 minutes with no status change. Escalating."
+
+      - alert: HighMTTR
+        expr: |
+          histogram_quantile(0.5,
+            rate(ims_mttr_minutes_bucket[1h])
+          ) > 60
+        for: 5m
+        labels:
+          severity: warning
+          team:     sre
+        annotations:
+          summary:     "Median MTTR > 60 minutes"
+          description: "The median Mean Time To Repair is {{ $value | humanize }} minutes over the last hour. Resolution quality may be degrading."
+
+      - alert: SignalIngestSpike
+        expr: rate(ims_signals_ingested_total[2m]) > 50
+        for: 1m
+        labels:
+          severity: warning
+          team:     sre
+        annotations:
+          summary:     "Signal ingestion rate spike: {{ $value | humanize }}/s"
+          description: "Signal ingestion rate has exceeded 50/s for 1 minute. This may indicate a cascading failure or a misconfigured monitor sending a signal storm."
+
+  # ── Worker Health ─────────────────────────────────────────
+  - name: ims_worker_health
+    rules:
+
+      - alert: WorkerHighErrorRate
+        expr: |
+          rate(ims_worker_signals_processed_total{status="error"}[5m])
+          /
+          (rate(ims_worker_signals_processed_total[5m]) + 0.001)
+          > 0.05
+        for: 2m
+        labels:
+          severity: warning
+          team:     sre
+        annotations:
+          summary:     "Worker error rate > 5%"
+          description: "The signal processing worker is failing > 5% of messages. Check DB connectivity and worker logs."
+
+      - alert: WorkerStalled
+        expr: rate(ims_worker_signals_processed_total[5m]) == 0
+        for: 3m
+        labels:
+          severity: critical
+          team:     sre
+        annotations:
+          summary:     "Worker has processed 0 signals in 3 minutes"
+          description: "The worker loop appears to be stalled. Signals are being ingested but not processed. Redis stream may be backed up."

@@ -2,6 +2,7 @@ import asyncio
 import structlog
 from fastapi import APIRouter, Depends, Query
 from typing import Optional
+from datetime import datetime, timedelta, timezone
 
 from app.core.rate_limiter import rate_limit_dependency
 from app.services.ingestion import ingest_signal
@@ -24,11 +25,10 @@ router = APIRouter(prefix="/api/v1/signals", tags=["Signals"])
 async def ingest(signal: SignalIngestionRequest):
     signal_id = await ingest_signal(signal)
 
-    # Storm detection — fire and forget, never blocks the response
-    asyncio.create_task(
-        __import__('app.api.sse', fromlist=['record_signal_for_storm_detection'])
-        .record_signal_for_storm_detection()
-    )
+    # Storm detection — deferred import avoids circular dependency at module level.
+    # Long-term fix: extract storm detection into services/storm.py (Step 3 refactor).
+    from app.api.sse import record_signal_for_storm_detection
+    asyncio.create_task(record_signal_for_storm_detection())
 
     return SignalResponse(
         signal_id=signal_id,
@@ -74,3 +74,54 @@ async def list_signals(
                 s[key] = s[key].isoformat()
 
     return {"signals": signals, "total": total, "skip": skip, "limit": limit}
+
+
+@router.get(
+    "/aggregations",
+    summary="Time-series aggregations from MongoDB",
+)
+async def get_signals_aggregation(
+    time_window_hours: int = Query(24, ge=1, le=168, description="Time window in hours"),
+    group_by: str = Query("component_id", description="Field to group by (e.g., component_id, severity, component_type)")
+):
+    """
+    Aggregation endpoint for signals over a rolling time window.
+    Satisfies assignment requirement: "Sink (Aggregations): Support timeseries 
+    aggregations directly from the document store".
+    """
+    db = get_mongo_db()
+    
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=time_window_hours)
+    
+    # MongoDB Aggregation Pipeline
+    pipeline = [
+        # 1. Filter by time window
+        {"$match": {"timestamp": {"$gte": cutoff}}},
+        # 2. Group by the requested field and count
+        {"$group": {
+            "_id": f"${group_by}",
+            "count": {"$sum": 1},
+            "last_seen": {"$max": "$timestamp"}
+        }},
+        # 3. Sort by count descending
+        {"$sort": {"count": -1}}
+    ]
+    
+    cursor = db.signals.aggregate(pipeline)
+    results = await cursor.to_list(length=100)
+    
+    # Format for JSON response
+    formatted = []
+    for r in results:
+        last_seen = r.get("last_seen")
+        formatted.append({
+            group_by: r["_id"] or "unknown",
+            "count": r["count"],
+            "last_seen": last_seen.isoformat() if hasattr(last_seen, "isoformat") else last_seen
+        })
+        
+    return {
+        "time_window_hours": time_window_hours,
+        "group_by": group_by,
+        "data": formatted
+    }

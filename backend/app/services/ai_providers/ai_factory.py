@@ -37,10 +37,14 @@ def get_ai_provider() -> BaseAIProvider:
         from app.services.ai_providers.ollama_provider import OllamaProvider
         return OllamaProvider()
 
+    elif provider == "groq":
+        from app.services.ai_providers.groq_provider import GroqProvider
+        return GroqProvider()
+
     else:
         raise ValueError(
             f"Unknown AI provider: '{provider}'. "
-            f"Valid options: gemini, claude, openai, ollama. "
+            f"Valid options: gemini, claude, openai, ollama, groq. "
             f"Set AI_PROVIDER env var to one of these."
         )
 

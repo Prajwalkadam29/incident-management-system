@@ -10,6 +10,9 @@ from sqlalchemy import select
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
 import logging
 
+from opentelemetry import trace
+from opentelemetry.propagate import extract
+
 from app.core.config import settings
 from app.db.redis_client import get_redis
 from app.db.postgres import AsyncSessionFactory
@@ -17,6 +20,8 @@ from app.db.mongo import get_mongo_db
 from app.models.sql_models import WorkItem, ComponentType, Severity
 from app.services.alerting import alerting_service, AlertPayload
 from app.services.ingestion import get_and_reset_signal_count
+from app.services import timeline as tl
+from app.models.sql_models import EventType
 
 logger = structlog.get_logger(__name__)
 
@@ -109,7 +114,7 @@ async def create_work_item_in_db(
                 severity=severity,
                 status="OPEN",
                 title=title,
-                signal_count="1",
+                signal_count=1,
             )
             session.add(work_item)
         await session.refresh(work_item)
@@ -121,18 +126,21 @@ async def create_work_item_in_db(
     wait=wait_exponential(multiplier=1, min=1, max=5),
     reraise=True,
 )
-async def increment_signal_count(work_item_id: str) -> None:
-    """Safely increment the signal counter on an existing Work Item."""
+async def increment_signal_count(work_item_id: str) -> int:
+    """Safely increment signal counter. Returns new count."""
     async with AsyncSessionFactory() as session:
         async with session.begin():
             result = await session.execute(
-                select(WorkItem).where(WorkItem.id == uuid.UUID(work_item_id))
-                .with_for_update()  # row-level lock — no race conditions
+                select(WorkItem)
+                .where(WorkItem.id == uuid.UUID(work_item_id))
+                .with_for_update()
             )
             work_item = result.scalar_one_or_none()
             if work_item:
-                current = int(work_item.signal_count or "0")
-                work_item.signal_count = str(current + 1)
+                new_count = (work_item.signal_count or 0) + 1
+                work_item.signal_count = new_count
+                return new_count
+    return 0
 
 
 @retry(
@@ -166,6 +174,8 @@ async def update_dashboard_cache(work_item_id: str, component_id: str,
 # Process a Single Signal
 # ──────────────────────────────────────────
 
+tracer = trace.get_tracer(__name__)
+
 async def process_signal(fields: dict) -> None:
     """
     Full processing pipeline for one signal:
@@ -175,85 +185,120 @@ async def process_signal(fields: dict) -> None:
     4. Update Redis dashboard cache
     5. Fire alert (only on new Work Item creation)
     """
-    component_id = fields["component_id"]
-    component_type = ComponentType(fields["component_type"])
-    severity_str = fields["severity"]
-    signal_id = fields["signal_id"]
-    message = fields["message"]
-    error_code = fields["error_code"]
-    metadata = json.loads(fields.get("metadata", "{}"))
-    timestamp = float(fields.get("timestamp", time.time()))
+    # Extract tracing context from metadata if it exists
+    metadata_str = fields.get("metadata", "{}")
+    metadata = json.loads(metadata_str)
+    
+    # Create span context from injected trace headers
+    ctx = extract(metadata.get("trace_headers", {}))
+    
+    with tracer.start_as_current_span("worker.process_signal", context=ctx) as span:
+        component_id = fields["component_id"]
+        component_type = ComponentType(fields["component_type"])
+        severity_str = fields["severity"]
+        signal_id = fields["signal_id"]
+        message = fields["message"]
+        error_code = fields["error_code"]
+        timestamp = float(fields.get("timestamp", time.time()))
 
-    # Determine severity from alerting strategy (overrides signal severity for P0 components)
-    computed_severity = alerting_service.get_severity_for_component(component_type)
+        span.set_attribute("component.id", component_id)
+        span.set_attribute("component.type", fields["component_type"])
+        span.set_attribute("signal.id", signal_id)
 
-    # ── Step 1: Debounce ──
-    new_work_item_id = await get_or_create_debounce_lock(component_id)
-    is_new_work_item = new_work_item_id is not None
+        # Determine severity from alerting strategy (overrides signal severity for P0 components)
+        computed_severity = alerting_service.get_severity_for_component(component_type)
 
-    if is_new_work_item:
-        work_item_id = new_work_item_id
-    else:
-        work_item_id = await get_existing_work_item_id(component_id)
-        if not work_item_id:
-            # Race condition edge case: lock expired between check and get
-            # Treat as new work item
-            new_work_item_id = str(uuid.uuid4())
+        # ── Step 1: Debounce ──
+        new_work_item_id = await get_or_create_debounce_lock(component_id)
+        is_new_work_item = new_work_item_id is not None
+
+        if is_new_work_item:
             work_item_id = new_work_item_id
-            is_new_work_item = True
+        else:
+            work_item_id = await get_existing_work_item_id(component_id)
+            if not work_item_id:
+                # Race condition edge case: lock expired between check and get
+                # Treat as new work item
+                new_work_item_id = str(uuid.uuid4())
+                work_item_id = new_work_item_id
+                is_new_work_item = True
 
-    # ── Step 2: PostgreSQL — create or update Work Item ──
-    if is_new_work_item:
-        title = f"[{computed_severity}] {component_type} failure on {component_id}"
-        await create_work_item_in_db(
+        # ── Step 2: PostgreSQL — create or update Work Item ──
+        if is_new_work_item:
+            title = f"[{computed_severity}] {component_type} failure on {component_id}"
+            await create_work_item_in_db(
+                work_item_id=work_item_id,
+                component_id=component_id,
+                component_type=component_type,
+                severity=computed_severity,
+                title=title,
+            )
+            logger.info("New Work Item created",
+                        work_item_id=work_item_id,
+                        component_id=component_id,
+                        severity=computed_severity)
+        else:
+            # Single increment — capture count for timeline (was incorrectly called twice before)
+            new_signal_count = await increment_signal_count(work_item_id)
+
+        # ── Step 3: MongoDB — store raw signal (always) ──
+        signal_doc = {
+            "signal_id": signal_id,
+            "work_item_id": work_item_id,
+            "component_id": component_id,
+            "component_type": fields["component_type"],
+            "error_code": error_code,
+            "message": message,
+            "severity": severity_str,
+            "metadata": metadata,
+            "timestamp": datetime.fromtimestamp(timestamp, tz=timezone.utc),
+            "ingested_at": datetime.now(timezone.utc),
+        }
+        await store_raw_signal_in_mongo(signal_doc)
+
+        # ── Step 4: Redis cache ──
+        await update_dashboard_cache(
             work_item_id=work_item_id,
             component_id=component_id,
-            component_type=component_type,
-            severity=computed_severity,
-            title=title,
+            severity=computed_severity.value,
+            status="OPEN",
         )
-        logger.info("New Work Item created",
-                    work_item_id=work_item_id,
-                    component_id=component_id,
-                    severity=computed_severity)
-    else:
-        await increment_signal_count(work_item_id)
 
-    # ── Step 3: MongoDB — store raw signal (always) ──
-    signal_doc = {
-        "signal_id": signal_id,
-        "work_item_id": work_item_id,
-        "component_id": component_id,
-        "component_type": fields["component_type"],
-        "error_code": error_code,
-        "message": message,
-        "severity": severity_str,
-        "metadata": metadata,
-        "timestamp": datetime.fromtimestamp(timestamp, tz=timezone.utc),
-        "ingested_at": datetime.now(timezone.utc),
-    }
-    await store_raw_signal_in_mongo(signal_doc)
+        # ── Step 5: Alert — only on first signal (new Work Item) ──
+        if is_new_work_item:
+            alert_payload = AlertPayload(
+                work_item_id=work_item_id,
+                component_id=component_id,
+                component_type=component_type,
+                severity=computed_severity,
+                title=title,
+                signal_count=1,
+                message=message,
+            )
+            await alerting_service.alert(alert_payload)
 
-    # ── Step 4: Redis cache ──
-    await update_dashboard_cache(
-        work_item_id=work_item_id,
-        component_id=component_id,
-        severity=computed_severity.value,
-        status="OPEN",
-    )
+        # ── Step 6: Timeline events ──
+        if is_new_work_item:
+            asyncio.create_task(tl.record_incident_created(
+                work_item_id=work_item_id,
+                component_id=component_id,
+                severity=computed_severity.value,
+                signal_count=1,
+            ))
+            asyncio.create_task(tl.record_alert_fired(
+                work_item_id=work_item_id,
+                severity=computed_severity.value,
+                channel=f"{computed_severity.value}_channel",
+            ))
+        else:
+            # Use count returned from the single increment call above
+            asyncio.create_task(tl.record_signal_received(
+                work_item_id=work_item_id,
+                error_code=error_code,
+                component_id=component_id,
+                signal_count=int(new_signal_count),
+            ))
 
-    # ── Step 5: Alert — only on first signal (new Work Item) ──
-    if is_new_work_item:
-        alert_payload = AlertPayload(
-            work_item_id=work_item_id,
-            component_id=component_id,
-            component_type=component_type,
-            severity=computed_severity,
-            title=title,
-            signal_count=1,
-            message=message,
-        )
-        await alerting_service.alert(alert_payload)
 
 
 # ──────────────────────────────────────────
@@ -337,7 +382,7 @@ async def metrics_loop() -> None:
 
     while _worker_running:
         await asyncio.sleep(settings.METRICS_INTERVAL_SECONDS)
-        count = get_and_reset_signal_count()
+        count = await get_and_reset_signal_count()
         rate = count / settings.METRICS_INTERVAL_SECONDS
         logger.info(
             "📊 THROUGHPUT METRICS",

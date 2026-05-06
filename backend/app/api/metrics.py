@@ -1,6 +1,8 @@
 import time
+from datetime import datetime, timedelta, timezone
 import structlog
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Response, Depends, Query
+
 from prometheus_client import (
     Counter, Gauge, Histogram,
     generate_latest, CONTENT_TYPE_LATEST,
@@ -12,6 +14,12 @@ from prometheus_client import (
     Gauge as PGauge,
     Histogram as PHistogram,
 )
+
+from app.core.security import get_current_user
+from app.db.postgres import AsyncSessionFactory
+from app.db.mongo import get_mongo_db
+from app.models.sql_models import WorkItem, WorkItemStatus
+from sqlalchemy import select, func, and_
 
 logger = structlog.get_logger(__name__)
 
@@ -101,3 +109,86 @@ async def metrics():
     await refresh_active_incident_gauges()
     data = generate_latest(REGISTRY)
     return Response(content=data, media_type=CONTENT_TYPE_LATEST)
+
+
+@router.get("/api/v1/metrics/mttr-trend", summary="MTTR timeseries for dashboard")
+async def get_mttr_trend(
+    days: int = Query(14, ge=1, le=90),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Returns the daily average MTTR (Mean Time To Resolution) for the past N days.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    
+    async with AsyncSessionFactory() as session:
+        # Postgres date_trunc and average
+        result = await session.execute(
+            select(
+                func.date_trunc('day', WorkItem.closed_at).label('date'),
+                func.avg(WorkItem.mttr_minutes).label('avg_mttr')
+            )
+            .where(
+                and_(
+                    WorkItem.status == WorkItemStatus.CLOSED,
+                    WorkItem.closed_at >= cutoff,
+                    WorkItem.mttr_minutes > 0
+                )
+            )
+            .group_by('date')
+            .order_by('date')
+        )
+        
+        rows = result.all()
+        
+    trend = []
+    for row in rows:
+        if row.date is not None:
+            trend.append({
+                "date": row.date.strftime('%Y-%m-%d'),
+                "mttr": round(float(row.avg_mttr), 1)
+            })
+            
+    return {"trend": trend}
+
+
+@router.get("/api/v1/metrics/signals-per-hour", summary="Signal ingestion timeseries")
+async def get_signals_per_hour(
+    hours: int = Query(24, ge=1, le=168),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Uses MongoDB aggregation to return the count of raw signals ingested per hour.
+    """
+    db = get_mongo_db()
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    
+    pipeline = [
+        {"$match": {"ingested_at": {"$gte": cutoff}}},
+        {
+            "$group": {
+                "_id": {
+                    "year": {"$year": "$ingested_at"},
+                    "month": {"$month": "$ingested_at"},
+                    "day": {"$dayOfMonth": "$ingested_at"},
+                    "hour": {"$hour": "$ingested_at"}
+                },
+                "count": {"$sum": 1}
+            }
+        },
+        {"$sort": {"_id.year": 1, "_id.month": 1, "_id.day": 1, "_id.hour": 1}}
+    ]
+    
+    cursor = db.signals.aggregate(pipeline)
+    
+    trend = []
+    async for doc in cursor:
+        _id = doc["_id"]
+        # Format as ISO string for the specific hour
+        dt = datetime(_id["year"], _id["month"], _id["day"], _id["hour"], 0, 0, tzinfo=timezone.utc)
+        trend.append({
+            "timestamp": dt.isoformat(),
+            "count": doc["count"]
+        })
+        
+    return {"trend": trend}

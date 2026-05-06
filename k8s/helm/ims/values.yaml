@@ -1,0 +1,63 @@
+# ============================================================
+# IMS - Helm Values
+# ============================================================
+
+backend:
+  replicaCount: 2
+  image:
+    repository: ims-backend
+    pullPolicy: IfNotPresent
+    tag: "latest"
+  service:
+    type: ClusterIP
+    port: 8000
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  env:
+    ENVIRONMENT: "production"
+    APP_NAME: "IMS"
+    FRONTEND_HOT_RELOAD: "false"
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  hosts:
+    - host: api.ims.local
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+
+# ── Dependency Configurations ──
+# We configure the sub-charts (Postgres, Redis, Mongo) here
+
+postgresql:
+  enabled: true
+  auth:
+    postgresPassword: "ims_secure_pg_password"
+    database: "ims_db"
+  primary:
+    persistence:
+      size: 8Gi
+
+redis:
+  enabled: true
+  auth:
+    enabled: false
+  master:
+    persistence:
+      size: 4Gi
+
+mongodb:
+  enabled: true
+  auth:
+    rootPassword: "ims_secure_mongo_password"
+    database: "ims_raw"
+  persistence:
+    size: 8Gi

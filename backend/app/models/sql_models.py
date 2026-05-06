@@ -4,7 +4,7 @@ from enum import Enum as PyEnum
 
 from sqlalchemy import (
     Column, String, DateTime, Enum, ForeignKey,
-    Text, Float, func, Index
+    Text, Float, Integer, func, Index
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -67,8 +67,8 @@ class WorkItem(Base):
     # MTTR in minutes (calculated on close)
     mttr_minutes = Column(Float, nullable=True)
 
-    # Signal counts
-    signal_count = Column(String(20), default="0")  # stored as string to avoid lock contention
+    # Signal count — Integer (was String in pre-Alembic schema; fixed in migration 0002)
+    signal_count = Column(Integer, nullable=False, default=0, server_default="0")
 
     # Relationships
     rca = relationship("RCARecord", back_populates="work_item",
@@ -114,3 +114,43 @@ class RCARecord(Base):
 
     def __repr__(self):
         return f"<RCARecord {self.id} for WorkItem {self.work_item_id}>"
+
+
+class EventType(str, PyEnum):
+    INCIDENT_CREATED   = "INCIDENT_CREATED"
+    STATUS_CHANGED     = "STATUS_CHANGED"
+    SIGNAL_RECEIVED    = "SIGNAL_RECEIVED"
+    RCA_SUBMITTED      = "RCA_SUBMITTED"
+    INCIDENT_CLOSED    = "INCIDENT_CLOSED"
+    ALERT_FIRED        = "ALERT_FIRED"
+    CORRELATION_LINKED = "CORRELATION_LINKED"
+    COMMENT_ADDED      = "COMMENT_ADDED"
+
+
+class IncidentEvent(Base):
+    __tablename__ = "incident_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    work_item_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("work_items.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    event_type = Column(Enum(EventType), nullable=False)
+    summary    = Column(String(500), nullable=False)  # human-readable description
+    actor      = Column(String(255), nullable=True)   # who triggered it (username or "system")
+    event_metadata   = Column(Text, nullable=True)          # JSON blob for extra context
+    created_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+    )
+
+    __table_args__ = (
+        Index("ix_incident_events_work_item_created", "work_item_id", "created_at"),
+    )
+
+    def __repr__(self):
+        return f"<IncidentEvent {self.event_type} on {self.work_item_id}>"

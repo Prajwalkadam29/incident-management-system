@@ -27,84 +27,118 @@ export default function DashboardPage() {
   })
 
   return (
-    <div className="min-h-screen bg-gray-950">
-      {/* Navbar */}
-      <nav className="bg-gray-900 border-b border-gray-800 px-6 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <span className="text-xl">🚨</span>
-          <span className="font-bold text-white">IMS</span>
-          <span className="text-gray-600">|</span>
-          <span className="text-gray-400 text-sm">Operations Dashboard</span>
-        </div>
+    <div className="min-h-screen bg-[#050505] bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-indigo-900/20 via-[#050505] to-black text-slate-300 font-sans selection:bg-indigo-500/30">
+      {/* Navbar with Glassmorphism */}
+      <nav className="sticky top-0 z-50 backdrop-blur-xl bg-[#050505]/70 border-b border-white/5 px-8 py-4 flex items-center justify-between shadow-2xl">
         <div className="flex items-center gap-4">
-          {/* Live indicator */}
-          <div className="flex items-center gap-1.5">
-            <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`} />
-            <span className="text-xs text-gray-500">{connected ? 'Live' : 'Reconnecting'}</span>
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+            <span className="text-xl">⚡</span>
           </div>
-          <span className="text-sm text-gray-400">{user.username}</span>
-          <button onClick={handleLogout}
-            className="text-xs text-gray-500 hover:text-white transition px-2 py-1 rounded border border-gray-700 hover:border-gray-500">
-            Logout
-          </button>
+          <div>
+            <h1 className="font-display font-bold text-white text-lg tracking-wide">MISSION CONTROL</h1>
+            <p className="text-xs text-indigo-400 font-medium tracking-widest uppercase">Incident Management</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-6">
+          {/* Live indicator */}
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 border border-white/10">
+            <span className="relative flex h-2.5 w-2.5">
+              {connected && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>}
+              <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${connected ? 'bg-emerald-400' : 'bg-rose-500'}`}></span>
+            </span>
+            <span className="text-xs font-medium tracking-wide text-slate-300 uppercase">{connected ? 'Live Feed' : 'Reconnecting'}</span>
+          </div>
+          <div className="h-6 w-px bg-white/10"></div>
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-full bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-300 font-bold text-sm">
+              {user?.username?.charAt(0)?.toUpperCase() || 'U'}
+            </div>
+            <button onClick={handleLogout}
+              className="text-xs font-medium text-slate-400 hover:text-white transition px-3 py-1.5 rounded-lg border border-transparent hover:bg-white/5 hover:border-white/10">
+              Logout
+            </button>
+          </div>
         </div>
       </nav>
 
-      <main className="max-w-7xl mx-auto px-6 py-6">
+      <main className="max-w-7xl mx-auto px-8 py-10 space-y-8">
         {/* Stats */}
-        <StatsBar stats={stats} />
+        <div className="backdrop-blur-md bg-white/[0.02] border border-white/5 rounded-2xl p-1 shadow-xl">
+          <StatsBar stats={stats} />
+        </div>
 
         {/* Error banner */}
         {error && (
-          <div className="mb-4 bg-yellow-900/20 border border-yellow-700/50 text-yellow-400 text-sm px-4 py-2 rounded-lg">
-            ⚠️ {error}
+          <div className="bg-rose-500/10 border border-rose-500/20 text-rose-400 px-6 py-4 rounded-xl flex items-center gap-3 animate-in fade-in slide-in-from-top-2">
+            <span className="text-lg">⚠️</span>
+            <p className="text-sm font-medium">{error}</p>
           </div>
         )}
 
         {/* Active Incidents Table */}
-        <div className="bg-gray-900 border border-gray-800 rounded-xl mb-6">
-          <div className="px-6 py-4 border-b border-gray-800 flex items-center justify-between">
-            <h2 className="font-semibold text-white">Active Incidents</h2>
-            <span className="text-xs text-gray-500">
-              {incidents.length} active · updates every 3s
-            </span>
+        <div className="backdrop-blur-md bg-white/[0.02] border border-white/5 rounded-2xl overflow-hidden shadow-2xl shadow-black/50">
+          <div className="px-8 py-6 border-b border-white/5 bg-white/[0.01] flex items-center justify-between">
+            <div>
+              <h2 className="font-display text-xl font-semibold text-white">Active Incidents</h2>
+              <p className="text-sm text-slate-500 mt-1">Real-time anomaly stream</p>
+            </div>
+            <div className="px-4 py-1.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-semibold tracking-wider">
+              {incidents.length} OPEN
+            </div>
           </div>
 
           {sorted.length === 0 ? (
-            <div className="px-6 py-12 text-center text-gray-600">
-              {data ? '✅ No active incidents' : 'Connecting to live feed...'}
+            <div className="px-8 py-24 text-center">
+              <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-emerald-500/10 text-emerald-400 mb-4">
+                <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+              <h3 className="text-lg font-medium text-white mb-1">System Healthy</h3>
+              <p className="text-slate-500">{data ? 'No active incidents requiring attention.' : 'Establishing secure connection...'}</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full">
+              <table className="w-full text-left border-collapse">
                 <thead>
-                  <tr className="text-xs text-gray-500 uppercase tracking-wider">
-                    <th className="px-6 py-3 text-left">Severity</th>
-                    <th className="px-6 py-3 text-left">Component</th>
-                    <th className="px-6 py-3 text-left">Title</th>
-                    <th className="px-6 py-3 text-left">Status</th>
-                    <th className="px-6 py-3 text-left">Signals</th>
-                    <th className="px-6 py-3 text-left">Age</th>
-                    <th className="px-6 py-3 text-left"></th>
+                  <tr className="bg-black/20 text-xs font-medium text-slate-500 uppercase tracking-widest border-b border-white/5">
+                    <th className="px-8 py-4 font-medium">Severity</th>
+                    <th className="px-8 py-4 font-medium">Component</th>
+                    <th className="px-8 py-4 font-medium">Title</th>
+                    <th className="px-8 py-4 font-medium">Status</th>
+                    <th className="px-8 py-4 font-medium">Signals</th>
+                    <th className="px-8 py-4 font-medium">Age</th>
+                    <th className="px-8 py-4"></th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-800">
+                <tbody className="divide-y divide-white/5">
                   {sorted.map(inc => (
                     <tr key={inc.id}
                       onClick={() => navigate(`/incidents/${inc.id}`)}
-                      className="hover:bg-gray-800/50 cursor-pointer transition group">
-                      <td className="px-6 py-4"><SeverityBadge severity={inc.severity} short /></td>
-                      <td className="px-6 py-4">
-                        <span className="font-mono text-sm text-gray-300">{inc.component_id}</span>
-                        <span className="ml-2 text-xs text-gray-600">{inc.component_type}</span>
+                      className="group hover:bg-white/[0.04] cursor-pointer transition-all duration-200">
+                      <td className="px-8 py-5"><SeverityBadge severity={inc.severity} short /></td>
+                      <td className="px-8 py-5">
+                        <div className="font-mono text-sm text-slate-200">{inc.component_id}</div>
+                        <div className="text-xs text-slate-500 mt-1 uppercase tracking-wide">{inc.component_type}</div>
                       </td>
-                      <td className="px-6 py-4 text-sm text-gray-300 max-w-xs truncate">{inc.title}</td>
-                      <td className="px-6 py-4"><StatusBadge status={inc.status} /></td>
-                      <td className="px-6 py-4 text-sm text-gray-400">{inc.signal_count}</td>
-                      <td className="px-6 py-4 text-sm text-gray-500">{getAge(inc.created_at)}</td>
-                      <td className="px-6 py-4 text-right">
-                        <span className="text-xs text-blue-500 opacity-0 group-hover:opacity-100 transition">
-                          View →
+                      <td className="px-8 py-5">
+                        <div className="text-sm font-medium text-slate-200 max-w-md truncate group-hover:text-white transition-colors">
+                          {inc.title}
+                        </div>
+                      </td>
+                      <td className="px-8 py-5"><StatusBadge status={inc.status} /></td>
+                      <td className="px-8 py-5">
+                        <span className="inline-flex items-center justify-center px-2 py-1 rounded-md bg-white/5 border border-white/10 text-xs font-mono text-slate-300">
+                          {inc.signal_count.toLocaleString()}
+                        </span>
+                      </td>
+                      <td className="px-8 py-5 text-sm font-medium text-slate-400">{getAge(inc.created_at)}</td>
+                      <td className="px-8 py-5 text-right">
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-400 opacity-0 -translate-x-4 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-300">
+                          ANALYZE
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                          </svg>
                         </span>
                       </td>
                     </tr>
@@ -116,7 +150,9 @@ export default function DashboardPage() {
         </div>
 
         {/* MTTR Chart */}
-        <MTTRChart />
+        <div className="backdrop-blur-md bg-white/[0.02] border border-white/5 rounded-2xl p-6 shadow-xl">
+          <MTTRChart />
+        </div>
       </main>
     </div>
   )

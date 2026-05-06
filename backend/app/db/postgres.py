@@ -11,7 +11,7 @@ logger = structlog.get_logger(__name__)
 # --- SQLAlchemy Async Engine ---
 engine = create_async_engine(
     settings.POSTGRES_URL,
-    echo=settings.DEBUG,
+    echo=settings.sqlalchemy_echo,
     pool_size=10,
     max_overflow=20,
     pool_pre_ping=True,   # verify connection is alive before using from pool
@@ -41,19 +41,24 @@ async def get_db_session() -> AsyncSession:
             raise
 
 
-# --- DB init with retry (resilience) ---
+# --- DB connection verification (schema managed by Alembic) ---
 @retry(
     stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=1, min=2, max=10),
     before_sleep=before_sleep_log(logging.getLogger(__name__), logging.WARNING),
 )
 async def init_db():
-    """Create all tables. Retries on failure (e.g., Postgres not ready yet)."""
+    """
+    Verify PostgreSQL is reachable and the schema is in place.
+
+    Schema creation/migration is handled by Alembic — entrypoint.sh runs
+    'alembic upgrade head' before this process starts. This function only
+    confirms connectivity. It does NOT call create_all().
+    """
+    from sqlalchemy import text
     async with engine.begin() as conn:
-        # Import here to ensure models are registered on Base.metadata
-        from app.models.sql_models import WorkItem, RCARecord  # noqa: F401
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("PostgreSQL tables created successfully")
+        await conn.execute(text("SELECT 1"))
+    logger.info("PostgreSQL connection verified — schema managed by Alembic")
 
 
 async def close_db():

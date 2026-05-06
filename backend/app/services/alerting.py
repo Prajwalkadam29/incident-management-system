@@ -1,9 +1,12 @@
+import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Dict, Type
+import httpx
 import structlog
 
 from app.models.sql_models import ComponentType, Severity
+from app.core.config import settings
 
 logger = structlog.get_logger(__name__)
 
@@ -24,14 +27,80 @@ class AlertPayload:
 
 
 # ──────────────────────────────────────────
+# Slack Webhook Client
+# ──────────────────────────────────────────
+
+async def send_slack_webhook(payload: AlertPayload, action: str, color: str = "#FF0000"):
+    """
+    Sends a formatted Block Kit message to Slack/Teams via incoming webhook.
+    """
+    if not settings.SLACK_WEBHOOK_URL:
+        logger.debug("SLACK_WEBHOOK_URL not set. Skipping real webhook.")
+        return
+
+    # Map severity to emoji
+    emoji = "🔴" if payload.severity in (Severity.P0, Severity.P1) else "🟡"
+    if payload.severity == Severity.P0:
+        emoji = "🚨"
+
+    # Block Kit Payload (Compatible with Slack, and easily adaptable to Teams)
+    slack_msg = {
+        "text": f"{emoji} {payload.severity.value} Alert: {payload.title}",
+        "attachments": [
+            {
+                "color": color,
+                "blocks": [
+                    {
+                        "type": "header",
+                        "text": {
+                            "type": "plain_text",
+                            "text": f"{emoji} {payload.severity.value} — {payload.title}"
+                        }
+                    },
+                    {
+                        "type": "section",
+                        "fields": [
+                            {"type": "mrkdwn", "text": f"*Component:*\n`{payload.component_id}`"},
+                            {"type": "mrkdwn", "text": f"*Type:*\n{payload.component_type.value}"},
+                            {"type": "mrkdwn", "text": f"*Action Req:*\n_{action}_"},
+                            {"type": "mrkdwn", "text": f"*Signals:* {payload.signal_count}"}
+                        ]
+                    },
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*Message:*\n```{payload.message}```"
+                        }
+                    },
+                    {
+                        "type": "context",
+                        "elements": [
+                            {"type": "mrkdwn", "text": f"Incident ID: `{payload.work_item_id}`"}
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.post(settings.SLACK_WEBHOOK_URL, json=slack_msg)
+            response.raise_for_status()
+            logger.info("Webhook sent successfully", work_item_id=payload.work_item_id)
+    except Exception as e:
+        logger.error("Failed to send webhook", error=str(e), work_item_id=payload.work_item_id)
+
+
+# ──────────────────────────────────────────
 # Abstract Strategy
 # ──────────────────────────────────────────
 
 class AlertStrategy(ABC):
     """
     Abstract base for all alerting strategies.
-    In production you'd call PagerDuty / OpsGenie / Slack here.
-    For this project we log structured alerts — easily swappable.
+    Different component types trigger different routing/urgency.
     """
 
     @abstractmethod
@@ -49,124 +118,63 @@ class AlertStrategy(ABC):
 # ──────────────────────────────────────────
 
 class P0RDBMSAlertStrategy(AlertStrategy):
-    """
-    P0 — Critical. RDBMS failures are the most severe.
-    Would page on-call immediately in production.
-    """
-
+    """P0 — Critical. RDBMS failures are the most severe."""
     def get_severity(self, component_type: ComponentType) -> Severity:
         return Severity.P0
 
     async def send_alert(self, payload: AlertPayload) -> None:
-        logger.critical(
-            "🚨 P0 ALERT — DATABASE FAILURE",
-            work_item_id=payload.work_item_id,
-            component_id=payload.component_id,
-            title=payload.title,
-            signal_count=payload.signal_count,
-            action="PAGE_ON_CALL_IMMEDIATELY",
-            channel="pagerduty",   # in prod: await pagerduty_client.trigger(payload)
-        )
+        logger.critical("🚨 P0 ALERT — DATABASE FAILURE", work_item_id=payload.work_item_id)
+        await send_slack_webhook(payload, action="PAGE ON-CALL IMMEDIATELY", color="#FF0000")
 
 
 class P0MCPHostAlertStrategy(AlertStrategy):
-    """
-    P0 — MCP Host failures affect all dependent services.
-    """
-
+    """P0 — MCP Host failures affect all dependent services."""
     def get_severity(self, component_type: ComponentType) -> Severity:
         return Severity.P0
 
     async def send_alert(self, payload: AlertPayload) -> None:
-        logger.critical(
-            "🚨 P0 ALERT — MCP HOST FAILURE",
-            work_item_id=payload.work_item_id,
-            component_id=payload.component_id,
-            title=payload.title,
-            signal_count=payload.signal_count,
-            action="PAGE_ON_CALL_IMMEDIATELY",
-            channel="pagerduty",
-        )
+        logger.critical("🚨 P0 ALERT — MCP HOST FAILURE", work_item_id=payload.work_item_id)
+        await send_slack_webhook(payload, action="PAGE ON-CALL IMMEDIATELY", color="#FF0000")
 
 
 class P1APIAlertStrategy(AlertStrategy):
-    """
-    P1 — High. API failures are user-facing.
-    """
-
+    """P1 — High. API failures are user-facing."""
     def get_severity(self, component_type: ComponentType) -> Severity:
         return Severity.P1
 
     async def send_alert(self, payload: AlertPayload) -> None:
-        logger.error(
-            "🔴 P1 ALERT — API FAILURE",
-            work_item_id=payload.work_item_id,
-            component_id=payload.component_id,
-            title=payload.title,
-            signal_count=payload.signal_count,
-            action="NOTIFY_ON_CALL",
-            channel="slack_oncall",  # in prod: await slack_client.post(payload)
-        )
+        logger.error("🔴 P1 ALERT — API FAILURE", work_item_id=payload.work_item_id)
+        await send_slack_webhook(payload, action="NOTIFY ON-CALL", color="#FF6600")
 
 
 class P1QueueAlertStrategy(AlertStrategy):
-    """
-    P1 — High. Async queue failures cause data pipeline delays.
-    """
-
+    """P1 — High. Async queue failures cause data pipeline delays."""
     def get_severity(self, component_type: ComponentType) -> Severity:
         return Severity.P1
 
     async def send_alert(self, payload: AlertPayload) -> None:
-        logger.error(
-            "🔴 P1 ALERT — QUEUE FAILURE",
-            work_item_id=payload.work_item_id,
-            component_id=payload.component_id,
-            title=payload.title,
-            signal_count=payload.signal_count,
-            action="NOTIFY_ON_CALL",
-            channel="slack_oncall",
-        )
+        logger.error("🔴 P1 ALERT — QUEUE FAILURE", work_item_id=payload.work_item_id)
+        await send_slack_webhook(payload, action="NOTIFY ON-CALL", color="#FF6600")
 
 
 class P2CacheAlertStrategy(AlertStrategy):
-    """
-    P2 — Medium. Cache failures degrade performance but don't cause outages.
-    """
-
+    """P2 — Medium. Cache failures degrade performance but don't cause outages."""
     def get_severity(self, component_type: ComponentType) -> Severity:
         return Severity.P2
 
     async def send_alert(self, payload: AlertPayload) -> None:
-        logger.warning(
-            "🟡 P2 ALERT — CACHE FAILURE",
-            work_item_id=payload.work_item_id,
-            component_id=payload.component_id,
-            title=payload.title,
-            signal_count=payload.signal_count,
-            action="NOTIFY_TEAM_CHANNEL",
-            channel="slack_infra",
-        )
+        logger.warning("🟡 P2 ALERT — CACHE FAILURE", work_item_id=payload.work_item_id)
+        await send_slack_webhook(payload, action="NOTIFY INFRA TEAM", color="#FFCC00")
 
 
 class P2NoSQLAlertStrategy(AlertStrategy):
-    """
-    P2 — Medium. NoSQL issues usually affect non-critical read paths.
-    """
-
+    """P2 — Medium. NoSQL issues usually affect non-critical read paths."""
     def get_severity(self, component_type: ComponentType) -> Severity:
         return Severity.P2
 
     async def send_alert(self, payload: AlertPayload) -> None:
-        logger.warning(
-            "🟡 P2 ALERT — NOSQL FAILURE",
-            work_item_id=payload.work_item_id,
-            component_id=payload.component_id,
-            title=payload.title,
-            signal_count=payload.signal_count,
-            action="NOTIFY_TEAM_CHANNEL",
-            channel="slack_infra",
-        )
+        logger.warning("🟡 P2 ALERT — NOSQL FAILURE", work_item_id=payload.work_item_id)
+        await send_slack_webhook(payload, action="NOTIFY INFRA TEAM", color="#FFCC00")
 
 
 # ──────────────────────────────────────────
@@ -202,9 +210,13 @@ class AlertingService:
 
     async def alert(self, payload: AlertPayload) -> None:
         strategy = self.get_strategy(payload.component_type)
-        await strategy.send_alert(payload)
+        
+        # We spawn the alert as a background task so it doesn't block the worker loop
+        # in case the webhook endpoint is slow or timing out.
+        asyncio.create_task(strategy.send_alert(payload))
+        
         logger.info(
-            "Alert dispatched",
+            "Alert dispatched to strategy",
             strategy=strategy.__class__.__name__,
             work_item_id=payload.work_item_id,
         )

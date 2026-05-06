@@ -6,17 +6,9 @@ export function MTTRChart() {
   const [data, setData] = useState([])
 
   useEffect(() => {
-    api.get('/workitems/', { params: { page_size: 100 } })
+    api.get('/metrics/mttr-trend')
       .then(res => {
-        const closed = res.data.items
-          .filter(wi => wi.status === 'CLOSED' && wi.mttr_minutes > 0)
-          .map(wi => ({
-            date: new Date(wi.closed_at).toLocaleDateString(),
-            mttr: Math.round(wi.mttr_minutes),
-            component: wi.component_id,
-          }))
-          .slice(-14) // last 14 closed incidents
-        setData(closed)
+        setData(res.data.trend || [])
       })
       .catch(() => {})
   }, [])
