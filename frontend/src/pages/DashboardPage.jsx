@@ -45,13 +45,27 @@ export default function DashboardPage() {
     <div className="min-h-screen bg-[#050505] bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-indigo-900/20 via-[#050505] to-black text-slate-300 font-sans selection:bg-indigo-500/30">
       {/* Navbar with Glassmorphism */}
       <nav className="sticky top-0 z-50 backdrop-blur-xl bg-[#050505]/70 border-b border-white/5 px-8 py-4 flex items-center justify-between shadow-2xl">
-        <div className="flex items-center gap-4">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
-            <span className="text-xl">⚡</span>
+        <div className="flex items-center gap-8">
+          <div className="flex items-center gap-4">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+              <span className="text-xl">⚡</span>
+            </div>
+            <div>
+              <h1 className="font-display font-bold text-white text-lg tracking-wide">MISSION CONTROL</h1>
+              <p className="text-xs text-indigo-400 font-medium tracking-widest uppercase">Incident Management</p>
+            </div>
           </div>
-          <div>
-            <h1 className="font-display font-bold text-white text-lg tracking-wide">MISSION CONTROL</h1>
-            <p className="text-xs text-indigo-400 font-medium tracking-widest uppercase">Incident Management</p>
+
+          {/* Navigation Menu */}
+          <div className="hidden md:flex items-center gap-1 bg-white/5 border border-white/10 rounded-xl p-1">
+            <button onClick={() => navigate('/')}
+              className="px-4 py-1.5 rounded-lg text-xs font-semibold tracking-wider uppercase transition-all duration-200 bg-indigo-500 text-white shadow-lg shadow-indigo-500/20">
+              Dashboard
+            </button>
+            <button onClick={() => navigate('/history')}
+              className="px-4 py-1.5 rounded-lg text-xs font-semibold tracking-wider uppercase text-slate-400 hover:text-white hover:bg-white/5 transition-all duration-200">
+              Incident History
+            </button>
           </div>
         </div>
         <div className="flex items-center gap-6">

@@ -90,10 +90,17 @@ services:
     volumes:
       - ./backend:/app   # hot reload in development
 
-  # NOTE: Frontend is a Vite dev server — run locally with:
-  #   cd frontend && npm install && npm run dev
-  # It proxies /api/* to http://localhost:8000 via vite.config.js
-  # A production frontend Dockerfile will be added in a future step.
+  # ── React Frontend ──────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ims_frontend
+    restart: unless-stopped
+    ports:
+      - "5173:80"   # Expose Nginx port 80 as 5173 to preserve dev URLs in production served assets
+    depends_on:
+      - backend
 
   # ── Prometheus ──────────────────────────────────────────────
   prometheus:

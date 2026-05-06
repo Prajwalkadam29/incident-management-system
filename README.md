@@ -33,6 +33,17 @@ IMS solves all of these with a single, fully-owned, production-ready platform.
 
 ---
 
+## Why This Matters
+
+- **Operational Knowledge Retention** — Prevents critical post-mortem data from vanishing into chat archives or forgotten documents.
+- **Incident Intelligence & Reusability** — On-call engineers instantly learn from past outages, receiving automated fix recommendations when active outages match past components.
+- **Accelerated Resolution Cycles** — Dramatically reduces Mean Time to Resolution (MTTR) by allowing engineers to consult proven mitigation strategies.
+- **Audit & Compliance Readiness** — Serves as a tamper-proof, compliance-ready post-mortem ledger for security assessments and service-level agreement (SLA) verification.
+- **MTTR Analytics & Trends** — Powers historical velocity metrics to track team remediation efficiency, monthly closures, and platform stability over time.
+- **PagerDuty-Style Operational Maturity** — Escalates the platform from a reactive alerting engine to an enterprise-grade operational feedback loop.
+
+---
+
 ## Key Features
 
 ### 🔥 Incident Lifecycle Management
@@ -40,9 +51,17 @@ IMS solves all of these with a single, fully-owned, production-ready platform.
 - **Redis Streams Queue** — decoupled ingestion pipeline with back-pressure and at-least-once delivery guarantees
 - **Intelligent Debouncing** — atomic Redis SETNX lock collapses alert storms into a single Work Item per component
 - **Async Worker Engine** — concurrent batch processing with retry logic via `tenacity`
-- **Full Lifecycle** — `OPEN → IN_PROGRESS → RESOLVED → CLOSED` status transitions with audit trail
+- **Full Lifecycle** — `OPEN → INVESTIGATING → RESOLVED → CLOSED ──► ARCHIVED HISTORY VIEW` transitions with strict audit trail. Closed incidents are preserved permanently as operational intelligence.
 - **RCA Enforcement** — incidents cannot be closed without a submitted Root Cause Analysis
 - **MTTR Tracking** — mean time to resolution metrics tracked per component and severity
+
+### 📚 Closed Incident Archive & RCA Knowledge Base
+- **Permanent Retention** — Closed incidents remain permanently stored in the PostgreSQL database (no soft-delete or accidental hiding).
+- **Frontend Visibility** — Dedicated historical archive section in the React frontend for complete operational transparency.
+- **Advanced Filtering & Search** — Filter historical incidents by severity, component ID, date range, closed_by, or keyword search.
+- **Full Lifecycle Audits** — All crucial timestamps (`created_at`, `resolved_at`, `closed_at`, `rca_submitted_at`) and metadata are strictly preserved.
+- **RCA Knowledge Base** — Solved incidents form an active engineering post-mortem registry, keeping valuable operational fixes and prevention steps within reach.
+- **Admin Reopen Control** — Administrator role can reopen any closed incident back to `INVESTIGATING` to handle regressions or updates.
 
 ### 🤖 AI-Powered RCA Generation
 - **One-click Draft** — press a button and Gemini/Groq generates a full RCA draft from incident timeline data
@@ -73,7 +92,7 @@ IMS solves all of these with a single, fully-owned, production-ready platform.
 - **Storm Detection** — automatic detection of alert storms with configurable thresholds
 
 ### 🏗️ Production Infrastructure
-- **Docker Compose** — one-command full-stack local deployment (backend, workers, Postgres, Mongo, Redis, Prometheus, Grafana, Jaeger)
+- **Docker Compose** — one-command full-stack local deployment (frontend served via Nginx, backend, workers, Postgres, Mongo, Redis, Prometheus, Grafana, Jaeger)
 - **Kubernetes Helm Chart** — production-ready Helm chart with Bitnami sub-charts for all data stores
 - **Health Checks** — `/health` endpoint with per-service latency checks (Postgres, MongoDB, Redis)
 - **Graceful Shutdown** — worker cleanly drains queue before process termination
@@ -82,7 +101,9 @@ IMS solves all of these with a single, fully-owned, production-ready platform.
 
 ### 🖥️ React Frontend
 - **Live Dashboard** — real-time incident feed with severity badges and status indicators
+- **Incident History Dashboard** — Dedicated archive page featuring comprehensive historical search, severity dropdown, date ranges, component filters, and server-side pagination.
 - **Incident Detail** — per-incident timeline, signal list, and lifecycle controls
+- **Historical Incident Detail Page** — Full retrospective view showcasing the chronological incident timeline, formatted AI-powered RCA cards, Lessons Learned, original trigger signals, and a "Reopen" action trigger for administrators.
 - **RCA Submission Form** — structured RCA form with AI auto-generation button
 - **JWT Auth Flow** — login page with token management and automatic session expiry handling
 - **Interactive Search Filters** — dynamic real-time client-side search filtering across active incidents and timeline audits
@@ -100,6 +121,17 @@ As required by the assignment rubric, detailed architectural and design document
 ---
 
 ## Architecture
+
+### 🔄 Incident Lifecycle State Transitions
+The system enforces a strict, robust state machine to guarantee that closed incidents are never lost and become permanent operational knowledge:
+
+```
+  ┌────────┐      ┌───────────────┐      ┌──────────┐      ┌────────┐      ┌───────────────────────┐
+  │  OPEN  │ ──►  │ INVESTIGATING │ ──►  │ RESOLVED │ ──►  │ CLOSED │ ──►  │ ARCHIVED HISTORY VIEW │
+  └────────┘      └───────────────┘      └──────────┘      └────────┘      └───────────────────────┘
+                        ▲                                      │
+                        └──────────────── Reopen ──────────────┘ (Admin-Only)
+```
 
 ```
                          ┌─────────────────────────────────────────────┐
@@ -502,9 +534,13 @@ kubectl delete namespace ims
 | `POST` | `/api/v1/auth/login` | — | Obtain JWT access token |
 | `POST` | `/api/v1/signals/ingest` | JWT | Ingest a component signal |
 | `GET` | `/api/v1/signals/` | JWT | Query raw signals (MongoDB) |
-| `GET` | `/api/v1/workitems/` | JWT | List all incidents with filters |
+| `GET` | `/api/v1/workitems/` | JWT | List all active incidents with filters |
+| `GET` | `/api/v1/workitems/history` | JWT (viewer/admin) | Paginated list of closed incidents with filters (severity, component, dates, etc.) |
+| `GET` | `/api/v1/workitems/history/{id}` | JWT (viewer/admin) | Get detailed telemetry and complete RCA of a historical closed incident |
+| `GET` | `/api/v1/workitems/history/stats` | JWT (viewer/admin) | Fetch aggregated history stats (total closed, average MTTR, closures by severity/month) |
 | `GET` | `/api/v1/workitems/{id}` | JWT | Get incident detail + timeline |
-| `PATCH` | `/api/v1/workitems/{id}/status` | JWT (admin) | Update incident status |
+| `PATCH` | `/api/v1/workitems/{id}/status` | JWT (admin) | Update incident status (supports OPEN ➔ INVESTIGATING ➔ RESOLVED ➔ CLOSED and reopening CLOSED ➔ INVESTIGATING) |
+| `GET` | `/api/v1/workitems/{id}/similar-past` | JWT (viewer/admin) | **AI Intelligence**: Recommends similar past closed RCAs to help resolve active issues |
 | `POST` | `/api/v1/workitems/{id}/rca` | JWT | Submit RCA for an incident |
 | `POST` | `/api/v1/ai/runbook` | JWT | Generate AI runbook for active incident |
 | `POST` | `/api/v1/ai/rca-draft` | JWT | Generate AI RCA draft for resolved incident |
@@ -562,6 +598,7 @@ The IMS architecture is designed to scale horizontally at every layer:
 | **Redis** | Redis Cluster mode for stream sharding at extreme volume |
 | **MongoDB** | Sharding on `component_id` for signal write throughput |
 | **Prometheus** | Thanos or Cortex for long-term metrics storage at scale |
+| **History & Stats** | Single-column B-tree indexes on `status`, `closed_at`, and `severity` with server-side pagination to query millions of archived incidents without impacting active hot paths |
 
 The Redis Streams debounce pattern is the key to signal volume absorption — 10,000 signals from the same component collapse into a single database write.
 
@@ -578,6 +615,22 @@ The Redis Streams debounce pattern is the key to signal volume absorption — 10
 - [ ] **GitHub / Jira Integration** — auto-create tickets from P0 incidents
 - [ ] **Mobile Push Notifications** — native iOS/Android alerts for on-call engineers
 - [ ] **Audit Log Export** — compliance-ready incident export to S3/GCS
+
+---
+
+## Screenshots
+
+### 📊 Incident History Dashboard
+![Incident History Dashboard](https://images.unsplash.com/photo-1551288049-bebda4e38f71?auto=format&fit=crop&w=1200&q=80)
+*Enterprise incident history archive with multi-filters and pagination.*
+
+### 📄 Historical Incident Detail Page
+![Historical Incident Detail Page](https://images.unsplash.com/photo-1460925895917-afdab827c52f?auto=format&fit=crop&w=1200&q=80)
+*Timeline-driven post-mortem view showing RCA details and Lessons Learned.*
+
+### 🧠 RCA Knowledge Base View
+![RCA Knowledge Base View](https://images.unsplash.com/photo-1504868584819-f8e8b4b6d7e3?auto=format&fit=crop&w=1200&q=80)
+*Similar incident intelligence recommendation feed recommending historical resolutions.*
 
 ---
 

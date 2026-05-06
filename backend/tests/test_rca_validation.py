@@ -103,13 +103,20 @@ def test_investigating_to_closed_rejected():
 
 
 def test_closed_to_any_rejected():
-    """Closed is a terminal state — no transitions allowed."""
+    """CLOSED can transition to INVESTIGATING (Reopen) but not to RESOLVED."""
     rca = make_rca()
     wi = make_work_item(WorkItemStatus.CLOSED, rca=rca)
+    
+    # CLOSED -> INVESTIGATING should succeed (reopening)
+    sm.transition(wi, WorkItemStatus.INVESTIGATING)
+    assert wi.status == WorkItemStatus.INVESTIGATING
+    assert wi.closed_at is None
+    assert wi.closed_by is None
+
+    # CLOSED -> RESOLVED is rejected
+    wi_closed = make_work_item(WorkItemStatus.CLOSED, rca=rca)
     with pytest.raises(InvalidStateTransitionError):
-        sm.transition(wi, WorkItemStatus.INVESTIGATING)
-    with pytest.raises(InvalidStateTransitionError):
-        sm.transition(wi, WorkItemStatus.RESOLVED)
+        sm.transition(wi_closed, WorkItemStatus.RESOLVED)
 
 
 # ──────────────────────────────────────────

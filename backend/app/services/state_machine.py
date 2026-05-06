@@ -38,7 +38,7 @@ class WorkItemState(ABC):
         pass
 
     @abstractmethod
-    def close(self, work_item) -> None:
+    def close(self, work_item, closed_by: str = None, archived_reason: str = None) -> None:
         pass
 
     @property
@@ -71,7 +71,7 @@ class OpenState(WorkItemState):
     def resolve(self, work_item) -> None:
         self._reject("RESOLVED")
 
-    def close(self, work_item) -> None:
+    def close(self, work_item, closed_by: str = None, archived_reason: str = None) -> None:
         self._reject("CLOSED")
 
 
@@ -90,7 +90,7 @@ class InvestigatingState(WorkItemState):
         logger.info("WorkItem transitioned INVESTIGATING → RESOLVED",
                     work_item_id=str(work_item.id))
 
-    def close(self, work_item) -> None:
+    def close(self, work_item, closed_by: str = None, archived_reason: str = None) -> None:
         self._reject("CLOSED")
 
 
@@ -105,7 +105,7 @@ class ResolvedState(WorkItemState):
     def resolve(self, work_item) -> None:
         self._reject("RESOLVED")  # already resolved
 
-    def close(self, work_item) -> None:
+    def close(self, work_item, closed_by: str = None, archived_reason: str = None) -> None:
         # Guard: RCA must exist and be complete
         if not work_item.rca:
             raise MissingRCAError(
@@ -132,11 +132,17 @@ class ResolvedState(WorkItemState):
         work_item.status = WorkItemStatus.CLOSED
         work_item.closed_at = datetime.now(timezone.utc)
         work_item.updated_at = datetime.now(timezone.utc)
+        
+        # Populate history / RCA fields
+        work_item.closed_by = closed_by
+        work_item.rca_submitted_at = work_item.rca.created_at
+        work_item.archived_reason = archived_reason
 
         logger.info(
             "WorkItem transitioned RESOLVED → CLOSED",
             work_item_id=str(work_item.id),
             mttr_minutes=work_item.mttr_minutes,
+            closed_by=closed_by,
         )
 
 
@@ -146,12 +152,18 @@ class ClosedState(WorkItemState):
         return WorkItemStatus.CLOSED
 
     def investigate(self, work_item) -> None:
-        self._reject("INVESTIGATING")
+        # Reopen Closed incident back to INVESTIGATING
+        work_item.status = WorkItemStatus.INVESTIGATING
+        work_item.updated_at = datetime.now(timezone.utc)
+        work_item.closed_at = None
+        work_item.closed_by = None
+        logger.info("WorkItem reopened CLOSED → INVESTIGATING",
+                    work_item_id=str(work_item.id))
 
     def resolve(self, work_item) -> None:
         self._reject("RESOLVED")
 
-    def close(self, work_item) -> None:
+    def close(self, work_item, closed_by: str = None, archived_reason: str = None) -> None:
         self._reject("CLOSED")  # already closed
 
 
@@ -184,7 +196,7 @@ class WorkItemStateMachine:
             raise ValueError(f"Unknown WorkItem status: {work_item.status}")
         return state_class()
 
-    def transition(self, work_item, target_status: WorkItemStatus) -> None:
+    def transition(self, work_item, target_status: WorkItemStatus, closed_by: str = None, archived_reason: str = None) -> None:
         state = self._get_state(work_item)
 
         if target_status == WorkItemStatus.INVESTIGATING:
@@ -192,7 +204,7 @@ class WorkItemStateMachine:
         elif target_status == WorkItemStatus.RESOLVED:
             state.resolve(work_item)
         elif target_status == WorkItemStatus.CLOSED:
-            state.close(work_item)
+            state.close(work_item, closed_by=closed_by, archived_reason=archived_reason)
         else:
             raise InvalidStateTransitionError(
                 f"Cannot manually transition to status: {target_status}"

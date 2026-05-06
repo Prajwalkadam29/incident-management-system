@@ -14,9 +14,12 @@ export default function IncidentDetailPage() {
 
   const [incident, setIncident]   = useState(null)
   const [signals, setSignals]     = useState([])
+  const [similarPast, setSimilarPast] = useState([])
   const [loading, setLoading]     = useState(true)
   const [transitioning, setTrans] = useState(false)
   const [error, setError]         = useState('')
+
+  const user = JSON.parse(localStorage.getItem('ims_user') || '{}')
 
   const fetchIncident = async () => {
     try {
@@ -26,6 +29,13 @@ export default function IncidentDetailPage() {
       ])
       setIncident(incRes.data)
       setSignals(sigRes.data.signals || [])
+      
+      try {
+        const similarRes = await api.get(`/workitems/${id}/similar-past`)
+        setSimilarPast(similarRes.data || [])
+      } catch (e) {
+        console.error('Failed to load similar past incidents', e)
+      }
     } catch {
       setError('Failed to load incident')
     } finally {
@@ -122,6 +132,30 @@ export default function IncidentDetailPage() {
                 )}
               </div>
             )}
+
+            {/* Reopen Button (Admin only) */}
+            {incident.status === 'CLOSED' && user.role === 'admin' && (
+              <div className="flex flex-col items-end gap-3 mt-4 md:mt-0">
+                <button
+                  onClick={() => handleTransition('INVESTIGATING')}
+                  disabled={transitioning}
+                  className="bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 text-sm font-semibold px-5 py-2.5 rounded-xl transition-all shadow-lg flex items-center gap-2 group">
+                  {transitioning ? (
+                    <span className="flex items-center gap-2">
+                      <span className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></span>
+                      Reopening...
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-2">
+                      Reopen Incident
+                      <svg className="w-4 h-4 group-hover:translate-x-1 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.706 8h-2.122" />
+                      </svg>
+                    </span>
+                  )}
+                </button>
+              </div>
+            )}
           </div>
 
           {error && (
@@ -160,7 +194,41 @@ export default function IncidentDetailPage() {
         {/* Incident Timeline */}
         <IncidentTimeline workItemId={id} />
 
-          {/* AI Runbook */}
+        {/* Similar Past Incidents Block (Incident Intelligence) */}
+        {similarPast.length > 0 && (
+          <div className="backdrop-blur-md bg-indigo-500/[0.02] border border-indigo-500/15 rounded-2xl p-8 shadow-xl relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/5 rounded-full blur-3xl pointer-events-none -translate-y-1/2 translate-x-1/3"></div>
+            <h2 className="font-display text-base font-semibold text-indigo-400 mb-6 flex items-center gap-3 uppercase tracking-wider">
+              <span>🧠</span>
+              Enterprise Incident Intelligence — Similar Past Outages
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 relative z-10">
+              {similarPast.map((item) => (
+                <div key={item.id} className="bg-white/[0.01] hover:bg-white/[0.03] border border-white/5 rounded-xl p-5 cursor-pointer transition-all duration-200 flex flex-col justify-between" onClick={() => navigate(`/incidents/${item.id}`)}>
+                  <div>
+                    <div className="flex justify-between items-start mb-3">
+                      <SeverityBadge severity={item.severity} short />
+                      <span className="text-[10px] font-mono text-slate-500">{new Date(item.closed_at).toLocaleDateString()}</span>
+                    </div>
+                    <h3 className="font-semibold text-slate-200 hover:text-white transition-colors text-sm mb-2">{item.title}</h3>
+                    <div className="text-xs text-slate-400 mb-4 font-mono uppercase tracking-wider">{item.component_id} • MTTR {item.mttr_minutes}m</div>
+                  </div>
+                  
+                  {item.rca && (
+                    <div className="space-y-2 border-t border-white/5 pt-3 mt-3">
+                      <div className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest">Proven Solution:</div>
+                      <div className="text-xs text-slate-300 leading-relaxed italic">"{item.rca.fix_applied}"</div>
+                      <div className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mt-2">Prevention Steps:</div>
+                      <div className="text-xs text-slate-400 leading-relaxed">"{item.rca.prevention_steps}"</div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* AI Runbook */}
         <RunbookSuggester incident={incident} />
 
         {/* Raw Signals */}

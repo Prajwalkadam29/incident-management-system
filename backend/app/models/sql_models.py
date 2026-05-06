@@ -70,12 +70,20 @@ class WorkItem(Base):
     # Signal count — Integer (was String in pre-Alembic schema; fixed in migration 0002)
     signal_count = Column(Integer, nullable=False, default=0, server_default="0")
 
+    # History / RCA fields
+    closed_by = Column(String(255), nullable=True)
+    rca_submitted_at = Column(DateTime(timezone=True), nullable=True)
+    archived_reason = Column(Text, nullable=True)
+
     # Relationships
     rca = relationship("RCARecord", back_populates="work_item",
                        uselist=False, cascade="all, delete-orphan")
 
-    # Composite index for common dashboard queries
+    # Composite and single indexes for common dashboard/history queries
     __table_args__ = (
+        Index("ix_work_items_status", "status"),
+        Index("ix_work_items_closed_at", "closed_at"),
+        Index("ix_work_items_severity", "severity"),
         Index("ix_work_items_status_severity", "status", "severity"),
         Index("ix_work_items_component_status", "component_id", "status"),
         Index("uix_work_items_component_open", "component_id", unique=True, postgresql_where=(status == 'OPEN')),
