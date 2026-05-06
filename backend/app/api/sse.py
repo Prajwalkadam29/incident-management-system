@@ -12,7 +12,7 @@ from app.core.security import decode_token
 from app.db.postgres import AsyncSessionFactory
 from app.db.redis_client import get_redis
 from app.models.sql_models import WorkItem, WorkItemStatus, Severity, ComponentType
-from app.services.worker import create_work_item_in_db, store_raw_signal_in_mongo, update_dashboard_cache
+from app.services.worker import upsert_work_item_in_db, store_raw_signal_in_mongo, update_dashboard_cache
 from app.services.alerting import alerting_service, AlertPayload
 from app.core.config import settings
 
@@ -80,7 +80,7 @@ async def maybe_create_storm_incident(signal_count: int):
     )
 
     try:
-        await create_work_item_in_db(
+        await upsert_work_item_in_db(
             work_item_id=storm_work_item_id,
             component_id="SYSTEMIC_OUTAGE",
             component_type=ComponentType.API,
@@ -126,7 +126,11 @@ async def maybe_create_storm_incident(signal_count: int):
 # SSE Event Generator
 # ──────────────────────────────────────────
 
-async def incident_event_generator(request: Request) -> AsyncGenerator[str, None]:
+async def incident_event_generator(
+    request: Request,
+    exp: Optional[int] = None,
+    username: Optional[str] = None,
+) -> AsyncGenerator[str, None]:
     """
     Streams live incident updates to connected clients.
     Sends a full snapshot every 3 seconds.
@@ -138,6 +142,12 @@ async def incident_event_generator(request: Request) -> AsyncGenerator[str, None
         while True:
             if await request.is_disconnected():
                 logger.info("SSE client disconnected", client=request.client.host)
+                break
+
+            # Mid-session token expiration check
+            if exp and time.time() > exp:
+                logger.warning("SSE session expired mid-stream — closing connection", username=username)
+                yield "event: auth_error\ndata: Session expired\n\n"
                 break
 
             try:
@@ -268,7 +278,11 @@ async def _get_sse_user(
             detail="Token missing subject claim.",
         )
 
-    return {"username": username, "role": payload.get("role", "viewer")}
+    return {
+        "username": username,
+        "role": payload.get("role", "viewer"),
+        "exp": payload.get("exp"),
+    }
 
 
 # ──────────────────────────────────────────
@@ -300,7 +314,11 @@ async def stream_incidents(
         client=request.client.host if request.client else "unknown",
     )
     return StreamingResponse(
-        incident_event_generator(request),
+        incident_event_generator(
+            request,
+            current_user.get("exp"),
+            current_user.get("username"),
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

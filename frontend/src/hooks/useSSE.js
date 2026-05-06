@@ -5,31 +5,78 @@ export function useSSE(url) {
   const [connected, setConnected] = useState(false)
   const [error, setError] = useState(null)
   const esRef = useRef(null)
+  const reconnectTimeoutRef = useRef(null)
+  const reconnectDelayRef = useRef(1000) // Start with 1s delay
 
   useEffect(() => {
-    const token = localStorage.getItem('ims_token')
+    let active = true
 
-    // SSE doesn't support headers natively — pass token as query param
-    const fullUrl = token ? `${url}?token=${token}` : url
-    const es = new EventSource(fullUrl)
-    esRef.current = es
+    function connect() {
+      if (!active) return
 
-    es.onopen = () => { setConnected(true); setError(null) }
+      const token = localStorage.getItem('ims_token')
+      const fullUrl = token ? `${url}?token=${token}` : url
 
-    es.onmessage = (e) => {
-      try {
-        const parsed = JSON.parse(e.data)
-        setData(parsed)
-      } catch { /* ignore malformed frames */ }
+      if (esRef.current) {
+        esRef.current.close()
+      }
+
+      const es = new EventSource(fullUrl)
+      esRef.current = es
+
+      es.onopen = () => {
+        if (!active) return
+        setConnected(true)
+        setError(null)
+        reconnectDelayRef.current = 1000 // Reset backoff delay on successful connection
+      }
+
+      es.onmessage = (e) => {
+        if (!active) return
+        try {
+          const parsed = JSON.parse(e.data)
+          setData(parsed)
+        } catch { /* ignore malformed frames */ }
+      }
+
+      // Handle server-side forced JWT expiration
+      es.addEventListener('auth_error', (e) => {
+        if (!active) return
+        setConnected(false)
+        setError('Session expired. Please log in again.')
+        es.close()
+        // Dispatch custom event to let the root auth provider know session expired
+        window.dispatchEvent(new CustomEvent('ims_auth_expired'))
+      })
+
+      es.onerror = () => {
+        if (!active) return
+        setConnected(false)
+        es.close()
+
+        const delay = reconnectDelayRef.current
+        setError(`Connection lost — reconnecting in ${(delay / 1000).toFixed(0)}s...`)
+        
+        // Exponential backoff capped at 30s
+        reconnectDelayRef.current = Math.min(delay * 2, 30000)
+
+        reconnectTimeoutRef.current = setTimeout(() => {
+          connect()
+        }, delay)
+      }
     }
 
-    es.onerror = () => {
-      setConnected(false)
-      setError('Connection lost — reconnecting...')
-      // Browser auto-reconnects EventSource after 3s
-    }
+    connect()
 
-    return () => { es.close(); setConnected(false) }
+    return () => {
+      active = false
+      if (esRef.current) {
+        esRef.current.close()
+      }
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current)
+      }
+    }
   }, [url])
 
   return { data, connected, error }

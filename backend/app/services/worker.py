@@ -6,7 +6,8 @@ import structlog
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
 import logging
 
@@ -29,6 +30,7 @@ logger = structlog.get_logger(__name__)
 _worker_running = False
 _worker_task: Optional[asyncio.Task] = None
 _metrics_task: Optional[asyncio.Task] = None
+_pel_retry_task: Optional[asyncio.Task] = None
 
 CONSUMER_NAME = f"worker-{uuid.uuid4().hex[:8]}"  # unique per process
 
@@ -97,50 +99,55 @@ async def get_existing_work_item_id(component_id: str) -> Optional[str]:
     before_sleep=before_sleep_log(logging.getLogger(__name__), logging.WARNING),
     reraise=True,
 )
-async def create_work_item_in_db(
+async def upsert_work_item_in_db(
         work_item_id: str,
         component_id: str,
         component_type: ComponentType,
         severity: Severity,
         title: str,
-) -> WorkItem:
-    """Create a Work Item in PostgreSQL with retry on transient failures."""
-    async with AsyncSessionFactory() as session:
-        async with session.begin():
-            work_item = WorkItem(
-                id=uuid.UUID(work_item_id),
-                component_id=component_id,
-                component_type=component_type,
-                severity=severity,
-                status="OPEN",
-                title=title,
-                signal_count=1,
-            )
-            session.add(work_item)
-        await session.refresh(work_item)
-        return work_item
+) -> tuple[str, bool, int]:
+    """
+    Atomic UPSERT in PostgreSQL using the partial unique index.
+    If no OPEN WorkItem exists for this component_id, inserts a new one.
+    Otherwise, increments signal_count.
 
-
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=5),
-    reraise=True,
-)
-async def increment_signal_count(work_item_id: str) -> int:
-    """Safely increment signal counter. Returns new count."""
+    Returns:
+        (actual_work_item_id, is_new_work_item, new_signal_count)
+    """
     async with AsyncSessionFactory() as session:
+        stmt = pg_insert(WorkItem).values(
+            id=uuid.UUID(work_item_id),
+            component_id=component_id,
+            component_type=component_type,
+            severity=severity,
+            status="OPEN",
+            title=title,
+            signal_count=1,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["component_id"],
+            index_where=text("status = 'OPEN'"),
+            set_={
+                "signal_count": WorkItem.signal_count + 1,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+
+        stmt = stmt.returning(WorkItem.id, WorkItem.signal_count)
+
         async with session.begin():
-            result = await session.execute(
-                select(WorkItem)
-                .where(WorkItem.id == uuid.UUID(work_item_id))
-                .with_for_update()
-            )
-            work_item = result.scalar_one_or_none()
-            if work_item:
-                new_count = (work_item.signal_count or 0) + 1
-                work_item.signal_count = new_count
-                return new_count
-    return 0
+            result = await session.execute(stmt)
+            row = result.fetchone()
+            if row:
+                returned_id = str(row[0])
+                new_signal_count = row[1]
+                is_new = (returned_id == work_item_id)
+                return returned_id, is_new, new_signal_count
+            else:
+                raise Exception("UPSERT did not return any rows")
 
 
 @retry(
@@ -168,6 +175,15 @@ async def update_dashboard_cache(work_item_id: str, component_id: str,
     })
     # Dashboard cache expires after 1 hour — prevents stale data
     await redis.expire(cache_key, 3600)
+
+
+_db_sem: Optional[asyncio.Semaphore] = None
+
+def get_db_semaphore() -> asyncio.Semaphore:
+    global _db_sem
+    if _db_sem is None:
+        _db_sem = asyncio.Semaphore(10)  # limit to 10 concurrent database sessions
+    return _db_sem
 
 
 # ──────────────────────────────────────────
@@ -208,38 +224,42 @@ async def process_signal(fields: dict) -> None:
         # Determine severity from alerting strategy (overrides signal severity for P0 components)
         computed_severity = alerting_service.get_severity_for_component(component_type)
 
-        # ── Step 1: Debounce ──
-        new_work_item_id = await get_or_create_debounce_lock(component_id)
-        is_new_work_item = new_work_item_id is not None
-
-        if is_new_work_item:
-            work_item_id = new_work_item_id
+        # ── Step 1: Debounce (Optimization) ──
+        existing_id = await get_existing_work_item_id(component_id)
+        if existing_id:
+            suggested_id = existing_id
         else:
-            work_item_id = await get_existing_work_item_id(component_id)
-            if not work_item_id:
-                # Race condition edge case: lock expired between check and get
-                # Treat as new work item
-                new_work_item_id = str(uuid.uuid4())
-                work_item_id = new_work_item_id
-                is_new_work_item = True
+            suggested_id = str(uuid.uuid4())
 
-        # ── Step 2: PostgreSQL — create or update Work Item ──
-        if is_new_work_item:
-            title = f"[{computed_severity}] {component_type} failure on {component_id}"
-            await create_work_item_in_db(
-                work_item_id=work_item_id,
+        title = f"[{computed_severity}] {component_type} failure on {component_id}"
+
+        # ── Step 2: PostgreSQL Atomic UPSERT ──
+        async with get_db_semaphore():
+            work_item_id, is_new_work_item, new_signal_count = await upsert_work_item_in_db(
+                work_item_id=suggested_id,
                 component_id=component_id,
                 component_type=component_type,
                 severity=computed_severity,
                 title=title,
             )
-            logger.info("New Work Item created",
+
+        if is_new_work_item:
+            # Save to Redis debounce cache so other signals can link to it
+            redis = get_redis()
+            await redis.set(
+                f"ims:debounce:{component_id}",
+                work_item_id,
+                ex=settings.DEBOUNCE_WINDOW_SECONDS,
+            )
+            logger.info("New Work Item created (via UPSERT)",
                         work_item_id=work_item_id,
                         component_id=component_id,
                         severity=computed_severity)
         else:
-            # Single increment — capture count for timeline (was incorrectly called twice before)
-            new_signal_count = await increment_signal_count(work_item_id)
+            logger.debug("Signal debounced and count incremented (via UPSERT)",
+                         work_item_id=work_item_id,
+                         component_id=component_id,
+                         new_count=new_signal_count)
 
         # ── Step 3: MongoDB — store raw signal (always) ──
         signal_doc = {
@@ -291,7 +311,6 @@ async def process_signal(fields: dict) -> None:
                 channel=f"{computed_severity.value}_channel",
             ))
         else:
-            # Use count returned from the single increment call above
             asyncio.create_task(tl.record_signal_received(
                 work_item_id=work_item_id,
                 error_code=error_code,
@@ -369,6 +388,105 @@ async def worker_loop() -> None:
 
 
 # ──────────────────────────────────────────
+# PEL Claiming & Reprocessing Loop (Resiliency)
+# ──────────────────────────────────────────
+
+async def pel_retry_loop() -> None:
+    """
+    SRE Resiliency Task: Periodically checks the consumer group's Pending Entries List (PEL)
+    to claim and reprocess orphaned or failed signals.
+    """
+    redis = get_redis()
+    logger.info("PEL Claim and Retry loop started")
+
+    while _worker_running:
+        try:
+            # 1. Fetch pending messages overview
+            pending_info = await redis.xpending_range(
+                settings.STREAM_NAME,
+                settings.STREAM_CONSUMER_GROUP,
+                min="-",
+                max="+",
+                count=50,
+            )
+
+            if not pending_info:
+                await asyncio.sleep(15)
+                continue
+
+            # Filter messages that have been pending for more than 15 seconds
+            to_claim = []
+            for item in pending_info:
+                # Some versions return bytes, handle both
+                msg_id = item["message_id"].decode("utf-8") if isinstance(item["message_id"], bytes) else item["message_id"]
+                idle_ms = item.get("time_since_delivered") or item.get("milliseconds_delivered") or 0
+                if idle_ms >= 15000:
+                    to_claim.append(msg_id)
+
+            if not to_claim:
+                await asyncio.sleep(15)
+                continue
+
+            logger.info("PEL Retry: claiming orphaned pending signals", count=len(to_claim))
+
+            # 2. Claim the pending messages under our current CONSUMER_NAME
+            claimed_entries = await redis.xclaim(
+                settings.STREAM_NAME,
+                settings.STREAM_CONSUMER_GROUP,
+                CONSUMER_NAME,
+                min_idle_time=15000,
+                message_ids=to_claim,
+            )
+
+            if not claimed_entries:
+                await asyncio.sleep(15)
+                continue
+
+            # 3. Process the claimed messages!
+            tasks = []
+            msg_ids = []
+            for msg_id, fields in claimed_entries:
+                # Ensure fields is decoded properly if needed
+                decoded_fields = {}
+                for k, v in fields.items():
+                    k_str = k.decode("utf-8") if isinstance(k, bytes) else k
+                    v_str = v.decode("utf-8") if isinstance(v, bytes) else v
+                    decoded_fields[k_str] = v_str
+                tasks.append(process_signal(decoded_fields))
+                msg_ids.append(msg_id)
+
+            if not tasks:
+                await asyncio.sleep(15)
+                continue
+
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            acked_ids = []
+            for msg_id, result in zip(msg_ids, results):
+                if isinstance(result, Exception):
+                    logger.error(
+                        "PEL Retry: reprocessing failed again — will retry next interval",
+                        msg_id=msg_id,
+                        error=str(result),
+                    )
+                else:
+                    acked_ids.append(msg_id)
+
+            if acked_ids:
+                await redis.xack(
+                    settings.STREAM_NAME,
+                    settings.STREAM_CONSUMER_GROUP,
+                    *acked_ids,
+                )
+                logger.info("PEL Retry: successfully reprocessed and ACKed signals", count=len(acked_ids))
+
+        except Exception as e:
+            logger.error("Error in PEL claim loop", error=str(e))
+
+        await asyncio.sleep(15)
+
+
+# ──────────────────────────────────────────
 # Throughput Metrics Loop
 # ──────────────────────────────────────────
 
@@ -397,15 +515,16 @@ async def metrics_loop() -> None:
 # ──────────────────────────────────────────
 
 async def start_worker() -> None:
-    global _worker_running, _worker_task, _metrics_task
+    global _worker_running, _worker_task, _metrics_task, _pel_retry_task
     _worker_running = True
     _worker_task = asyncio.create_task(worker_loop())
     _metrics_task = asyncio.create_task(metrics_loop())
-    logger.info("Background worker and metrics loop started")
+    _pel_retry_task = asyncio.create_task(pel_retry_loop())
+    logger.info("Background worker, metrics, and PEL retry loops started")
 
 
 async def stop_worker() -> None:
-    global _worker_running, _worker_task, _metrics_task
+    global _worker_running, _worker_task, _metrics_task, _pel_retry_task
     _worker_running = False
 
     if _worker_task:
@@ -419,6 +538,13 @@ async def stop_worker() -> None:
         _metrics_task.cancel()
         try:
             await _metrics_task
+        except asyncio.CancelledError:
+            pass
+
+    if _pel_retry_task:
+        _pel_retry_task.cancel()
+        try:
+            await _pel_retry_task
         except asyncio.CancelledError:
             pass
 

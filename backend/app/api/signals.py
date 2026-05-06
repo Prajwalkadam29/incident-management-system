@@ -1,6 +1,6 @@
 import asyncio
 import structlog
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from typing import Optional
 from datetime import datetime, timedelta, timezone
 
@@ -8,6 +8,7 @@ from app.core.rate_limiter import rate_limit_dependency
 from app.services.ingestion import ingest_signal
 from app.models.schemas import SignalIngestionRequest, SignalResponse
 from app.db.mongo import get_mongo_db
+from app.db.redis_client import get_redis
 from app.models.sql_models import ComponentType, Severity
 
 logger = structlog.get_logger(__name__)
@@ -23,7 +24,18 @@ router = APIRouter(prefix="/api/v1/signals", tags=["Signals"])
     dependencies=[Depends(rate_limit_dependency)],
 )
 async def ingest(signal: SignalIngestionRequest):
-    signal_id = await ingest_signal(signal)
+    try:
+        signal_id = await ingest_signal(signal)
+    except Exception as e:
+        logger.critical(
+            "Signal ingestion failed: Redis stream/queue is unavailable",
+            component_id=signal.component_id,
+            error=str(e),
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Signal ingestion service is temporarily unavailable due to downstream queue connection issues.",
+        )
 
     # Storm detection — deferred import avoids circular dependency at module level.
     # Long-term fix: extract storm detection into services/storm.py (Step 3 refactor).
@@ -82,15 +94,31 @@ async def list_signals(
 )
 async def get_signals_aggregation(
     time_window_hours: int = Query(24, ge=1, le=168, description="Time window in hours"),
-    group_by: str = Query("component_id", description="Field to group by (e.g., component_id, severity, component_type)")
+    group_by: str = Query("component_id", description="Field to group by (e.g., component_id, severity, component_type)"),
+    bypass_cache: bool = Query(False, description="Bypass the cache and query the database directly")
 ):
     """
     Aggregation endpoint for signals over a rolling time window.
     Satisfies assignment requirement: "Sink (Aggregations): Support timeseries 
     aggregations directly from the document store".
+
+    Includes a high-performance 10-second Redis read-through caching layer
+    to shield the database from dashboard storming.
     """
+    redis = get_redis()
+    cache_key = f"ims:cache:signals:agg:{time_window_hours}:{group_by}"
+
+    if not bypass_cache:
+        try:
+            cached_val = await redis.get(cache_key)
+            if cached_val:
+                import json
+                logger.info("Serving signal aggregations from Redis cache", window_hours=time_window_hours, group_by=group_by)
+                return json.loads(cached_val)
+        except Exception as e:
+            logger.error("Failed to read signal aggregation cache", error=str(e))
+
     db = get_mongo_db()
-    
     cutoff = datetime.now(timezone.utc) - timedelta(hours=time_window_hours)
     
     # MongoDB Aggregation Pipeline
@@ -120,8 +148,20 @@ async def get_signals_aggregation(
             "last_seen": last_seen.isoformat() if hasattr(last_seen, "isoformat") else last_seen
         })
         
-    return {
+    response_data = {
         "time_window_hours": time_window_hours,
         "group_by": group_by,
-        "data": formatted
+        "data": formatted,
+        "cached": False
     }
+
+    # Store in Redis with a short 10-second TTL
+    try:
+        import json
+        cache_payload = response_data.copy()
+        cache_payload["cached"] = True
+        await redis.setex(cache_key, 10, json.dumps(cache_payload))
+    except Exception as e:
+        logger.error("Failed to write signal aggregation cache", error=str(e))
+
+    return response_data

@@ -47,6 +47,7 @@ async def list_work_items(
         status: Optional[WorkItemStatus] = Query(None),
         severity: Optional[str] = Query(None),
         component_type: Optional[str] = Query(None),
+        component_id: Optional[str] = Query(None),
         page: int = Query(1, ge=1),
         page_size: int = Query(20, ge=1, le=100),
         session=Depends(get_db_session),
@@ -63,6 +64,8 @@ async def list_work_items(
         query = query.where(WorkItem.severity == severity)
     if component_type:
         query = query.where(WorkItem.component_type == component_type)
+    if component_id:
+        query = query.where(WorkItem.component_id == component_id)
 
     # Count total for pagination
     count_query = select(func.count()).select_from(

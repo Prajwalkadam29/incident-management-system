@@ -110,17 +110,17 @@ INCIDENT DETAILS:
 - Work Item ID: {request.work_item_id}
 
 Generate a concise, actionable runbook for this incident.
+CRITICAL: Include exact terminal commands (bash, kubectl, SQL queries, etc.) inline where applicable.
 Respond ONLY with a valid JSON object in this exact format, no markdown, no explanation:
 
 {{
   "summary": "One or two sentence summary of what is likely happening and its impact",
   "immediate_actions": [
-    "First thing to do right now",
-    "Second immediate action",
-    "Third immediate action"
+    "First thing to do right now (e.g. `kubectl scale deployment <name> --replicas=3`)",
+    "Second immediate action"
   ],
   "investigation_steps": [
-    "How to confirm the root cause",
+    "How to confirm the root cause (e.g. `kubectl logs -l app=<name>`)",
     "What logs/metrics to check",
     "What queries to run"
   ],

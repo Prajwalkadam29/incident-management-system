@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from app.services.ai_providers.base import RunbookRequest, RunbookResponse, RCARequest, RCAResponse
 from app.services.ai_providers.ai_factory import get_cached_ai_provider
 from app.core.security import get_current_user
+from app.db.redis_client import get_redis
 
 logger = structlog.get_logger(__name__)
 
@@ -19,6 +20,7 @@ class RunbookAPIRequest(BaseModel):
     severity: str
     message: str
     signal_count: int = 1
+    bypass_cache: bool = False
 
 
 class RunbookAPIResponse(BaseModel):
@@ -42,6 +44,7 @@ class RCAAPIRequest(BaseModel):
     duration_minutes: int
     resolution_notes: str
     timeline_events: list[dict]
+    bypass_cache: bool = False
 
 
 class RCAAPIResponse(BaseModel):
@@ -72,8 +75,29 @@ async def generate_runbook(
 
     The provider is selected via the AI_PROVIDER environment variable.
     Switching providers requires zero code changes.
+
+    Includes a Redis cache layer to protect upstream model rate-limits.
     """
     try:
+        redis = get_redis()
+        cache_key = f"ims:cache:ai:runbook:{request.component_id}:{request.error_code}"
+
+        if not request.bypass_cache:
+            try:
+                cached_val = await redis.get(cache_key)
+                if cached_val:
+                    import json
+                    logger.info(
+                        "Runbook served from Redis cache",
+                        component=request.component_id,
+                        error_code=request.error_code,
+                    )
+                    cached_data = json.loads(cached_val)
+                    cached_data["provider"] = f"{cached_data.get('provider')} (cached)"
+                    return RunbookAPIResponse(**cached_data)
+            except Exception as e:
+                logger.error("Failed to read runbook cache", error=str(e))
+
         provider = get_cached_ai_provider()
 
         runbook_request = RunbookRequest(
@@ -103,7 +127,7 @@ async def generate_runbook(
             component=request.component_id,
         )
 
-        return RunbookAPIResponse(
+        api_res = RunbookAPIResponse(
             summary=result.summary,
             immediate_actions=result.immediate_actions,
             investigation_steps=result.investigation_steps,
@@ -113,6 +137,15 @@ async def generate_runbook(
             provider=result.provider,
             model=result.model,
         )
+
+        # Store in Redis with a 1-hour (3600 seconds) expiration
+        try:
+            import json
+            await redis.setex(cache_key, 3600, json.dumps(api_res.dict()))
+        except Exception as e:
+            logger.error("Failed to write runbook cache", error=str(e))
+
+        return api_res
 
     except ValueError as e:
         # Config error — missing API key etc.
@@ -139,8 +172,28 @@ async def generate_rca_draft(
 
     Uses the configured AI provider to analyze incident timeline,
     signals, and resolution notes to produce a structured RCA.
+
+    Includes a Redis cache layer to protect upstream model rate-limits.
     """
     try:
+        redis = get_redis()
+        cache_key = f"ims:cache:ai:rcadraft:{request.work_item_id}"
+
+        if not request.bypass_cache:
+            try:
+                cached_val = await redis.get(cache_key)
+                if cached_val:
+                    import json
+                    logger.info(
+                        "RCA draft served from Redis cache",
+                        work_item_id=request.work_item_id,
+                    )
+                    cached_data = json.loads(cached_val)
+                    cached_data["provider"] = f"{cached_data.get('provider')} (cached)"
+                    return RCAAPIResponse(**cached_data)
+            except Exception as e:
+                logger.error("Failed to read RCA draft cache", error=str(e))
+
         provider = get_cached_ai_provider()
 
         rca_request = RCARequest(
@@ -171,7 +224,7 @@ async def generate_rca_draft(
             work_item_id=request.work_item_id,
         )
 
-        return RCAAPIResponse(
+        api_res = RCAAPIResponse(
             executive_summary=result.executive_summary,
             impact=result.impact,
             root_cause=result.root_cause,
@@ -181,6 +234,15 @@ async def generate_rca_draft(
             provider=result.provider,
             model=result.model,
         )
+
+        # Store in Redis with a 1-hour (3600 seconds) expiration
+        try:
+            import json
+            await redis.setex(cache_key, 3600, json.dumps(api_res.dict()))
+        except Exception as e:
+            logger.error("Failed to write RCA draft cache", error=str(e))
+
+        return api_res
 
     except ValueError as e:
         raise HTTPException(status_code=503, detail=str(e))

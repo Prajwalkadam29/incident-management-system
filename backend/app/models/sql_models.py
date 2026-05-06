@@ -78,6 +78,7 @@ class WorkItem(Base):
     __table_args__ = (
         Index("ix_work_items_status_severity", "status", "severity"),
         Index("ix_work_items_component_status", "component_id", "status"),
+        Index("uix_work_items_component_open", "component_id", unique=True, postgresql_where=(status == 'OPEN')),
     )
 
     def __repr__(self):

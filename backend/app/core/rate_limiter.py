@@ -23,35 +23,46 @@ class RateLimiter:
         self.window = window
 
     async def check(self, request: Request):
-        redis = get_redis()
-        # Use IP as the key — X-Forwarded-For for proxied requests
-        ip = request.headers.get("X-Forwarded-For", request.client.host)
-        key = f"rl:{ip}"
-        now = time.time()
-        window_start = now - self.window
+        try:
+            redis = get_redis()
+            # Use IP as the key — X-Forwarded-For for proxied requests
+            ip = request.headers.get("X-Forwarded-For", request.client.host)
+            key = f"rl:{ip}"
+            now = time.time()
+            window_start = now - self.window
 
-        # Pipeline: remove old entries, add current, count, set expiry — atomically
-        async with redis.pipeline(transaction=True) as pipe:
-            pipe.zremrangebyscore(key, 0, window_start)   # remove expired
-            pipe.zadd(key, {str(now): now})                # add current request
-            pipe.zcard(key)                                # count in window
-            pipe.expire(key, self.window)                  # auto-cleanup
-            results = await pipe.execute()
+            # Pipeline: remove old entries, add current, count, set expiry — atomically
+            async with redis.pipeline(transaction=True) as pipe:
+                pipe.zremrangebyscore(key, 0, window_start)   # remove expired
+                pipe.zadd(key, {str(now): now})                # add current request
+                pipe.zcard(key)                                # count in window
+                pipe.expire(key, self.window)                  # auto-cleanup
+                results = await pipe.execute()
 
-        count = results[2]
+            count = results[2]
 
-        if count > self.requests:
-            logger.warning("Rate limit exceeded", ip=ip, count=count)
-            raise HTTPException(
-                status_code=429,
-                detail={
-                    "error": "rate_limit_exceeded",
-                    "message": f"Max {self.requests} requests per {self.window}s",
-                    "retry_after_seconds": self.window,
-                }
+            if count > self.requests:
+                logger.warning("Rate limit exceeded", ip=ip, count=count)
+                raise HTTPException(
+                    status_code=429,
+                    detail={
+                        "error": "rate_limit_exceeded",
+                        "message": f"Max {self.requests} requests per {self.window}s",
+                        "retry_after_seconds": self.window,
+                    }
+                )
+
+            return count
+        except HTTPException:
+            # Re-raise 429 exceptions so they are not bypassed
+            raise
+        except Exception as e:
+            # Fail-Open under Redis connection or pool outages
+            logger.error(
+                "Rate limiter cache unavailable — failing OPEN",
+                error=str(e),
             )
-
-        return count
+            return 0
 
 
 # Singleton instance used as a FastAPI dependency
