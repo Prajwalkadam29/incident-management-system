@@ -85,6 +85,8 @@ IMS solves all of these with a single, fully-owned, production-ready platform.
 - **Incident Detail** — per-incident timeline, signal list, and lifecycle controls
 - **RCA Submission Form** — structured RCA form with AI auto-generation button
 - **JWT Auth Flow** — login page with token management and automatic session expiry handling
+- **Interactive Search Filters** — dynamic real-time client-side search filtering across active incidents and timeline audits
+- **Smart Timeline Pagination** — modern 5-by-5 incremental "Load More" timeline feeds modeled after YouTube and LinkedIn comment replies
 
 ---
 
@@ -332,6 +334,38 @@ npm run dev
 | Grafana | `admin` | `GRAFANA_ADMIN_PASSWORD` |
 
 > **Security Note:** These are development defaults. In production, use a secrets manager (AWS Secrets Manager, HashiCorp Vault) and rotate credentials regularly.
+
+---
+
+## 🧪 Testing & Validation Quick Start
+
+IMS features an elite-grade, comprehensive automated testing portfolio. This suite includes lightweight unit validations, high-throughput database concurrency checks, JWT connection disconnect testing, complete database and cache chaos injection, and a 100-user concurrent storm benchmark tool.
+
+For a full breakdown of the testing architecture, expected outputs, and troubleshooting steps, consult the **[Testing & Verification Manual (docs/TESTING.md)](docs/TESTING.md)**.
+
+### Running Tests via unified SRE Makefile:
+
+Ensure your local virtual environment is active, and then execute:
+
+```bash
+# 1. Run the entire, end-to-end SRE validation pipeline
+make test
+
+# 2. Run lightweight isolative pytest unit tests
+make test-unit
+
+# 3. Run concurrency, secure JWT stream disconnect, and container chaos
+make test-integration
+
+# 4. Run 100-user concurrent storm aggregation cache and AI caching benchmarks
+make load-test
+
+# 5. Run full role isolation, state machine, and MTTR lifecycle checks
+make e2e
+
+# 6. Check code compilation and syntax safety
+make lint
+```
 
 ---
 
