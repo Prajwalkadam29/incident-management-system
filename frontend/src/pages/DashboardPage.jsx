@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useSSE } from '@/hooks/useSSE'
 import { SeverityBadge } from '@/components/SeverityBadge'
@@ -8,6 +9,7 @@ import { MTTRChart } from '@/components/MTTRChart'
 export default function DashboardPage() {
   const navigate  = useNavigate()
   const { data, connected, error } = useSSE('/api/v1/stream/incidents')
+  const [searchQuery, setSearchQuery] = useState('')
 
   const user = JSON.parse(localStorage.getItem('ims_user') || '{}')
 
@@ -20,8 +22,21 @@ export default function DashboardPage() {
   const incidents = data?.incidents || []
   const stats     = data?.stats
 
+  // Filter incidents by search query
+  const filtered = incidents.filter(inc => {
+    const query = searchQuery.toLowerCase().trim()
+    if (!query) return true
+    return (
+      inc.title?.toLowerCase().includes(query) ||
+      inc.component_id?.toLowerCase().includes(query) ||
+      inc.component_type?.toLowerCase().includes(query) ||
+      inc.severity?.toLowerCase().includes(query) ||
+      inc.status?.toLowerCase().includes(query)
+    )
+  })
+
   // Sort: P0 first, then by created_at desc
-  const sorted = [...incidents].sort((a, b) => {
+  const sorted = [...filtered].sort((a, b) => {
     const sev = { P0: 0, P1: 1, P2: 2, P3: 3 }
     return (sev[a.severity] - sev[b.severity]) || new Date(b.created_at) - new Date(a.created_at)
   })
@@ -77,13 +92,34 @@ export default function DashboardPage() {
 
         {/* Active Incidents Table */}
         <div className="backdrop-blur-md bg-white/[0.02] border border-white/5 rounded-2xl overflow-hidden shadow-2xl shadow-black/50">
-          <div className="px-8 py-6 border-b border-white/5 bg-white/[0.01] flex items-center justify-between">
+          <div className="px-8 py-6 border-b border-white/5 bg-white/[0.01] flex items-center justify-between flex-wrap gap-4">
             <div>
               <h2 className="font-display text-xl font-semibold text-white">Active Incidents</h2>
               <p className="text-sm text-slate-500 mt-1">Real-time anomaly stream</p>
             </div>
+            
+            {/* Active Incidents Search Box */}
+            <div className="flex-1 max-w-md mx-6 relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm">🔍</span>
+              <input
+                type="text"
+                placeholder="Filter incidents by title, component, status..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="bg-black/40 border border-white/10 text-sm rounded-xl pl-9 pr-8 py-2 w-full text-white placeholder-slate-550 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all duration-200"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white transition-colors"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+
             <div className="px-4 py-1.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-semibold tracking-wider">
-              {incidents.length} OPEN
+              {filtered.length} of {incidents.length} OPEN
             </div>
           </div>
 

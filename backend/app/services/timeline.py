@@ -41,7 +41,7 @@ async def record_event(
                 event_type=event_type,
                 summary=summary,
                 actor=actor,
-                metadata=json.dumps(metadata) if metadata else None,
+                event_metadata=json.dumps(metadata) if metadata else None,
             )
             session.add(event)
 
@@ -141,12 +141,12 @@ async def record_alert_fired(
 # ──────────────────────────────────────────
 
 async def get_timeline(work_item_id: str) -> list[dict]:
-    """Fetch all timeline events for a Work Item, oldest first."""
+    """Fetch all timeline events for a Work Item, latest first."""
     async with AsyncSessionFactory() as session:
         result = await session.execute(
             select(IncidentEvent)
             .where(IncidentEvent.work_item_id == uuid.UUID(work_item_id))
-            .order_by(IncidentEvent.created_at.asc())
+            .order_by(IncidentEvent.created_at.desc())
         )
         events = result.scalars().all()
 
@@ -156,7 +156,7 @@ async def get_timeline(work_item_id: str) -> list[dict]:
             "event_type":   e.event_type.value,
             "summary":      e.summary,
             "actor":        e.actor,
-            "metadata":     json.loads(e.metadata) if e.metadata else {},
+            "metadata":     json.loads(e.event_metadata) if e.event_metadata else {},
             "created_at":   e.created_at.isoformat(),
         }
         for e in events
